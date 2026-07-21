@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Forex Signal Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="dashboard">
+        <header>
+            <h1>AI Forex Signal <span>Pro</span></h1>
+            <p>100% Fully Automated Agent-Native Trading</p>
+        </header>
+
+        <main>
+            <div class="control-panel glass">
+                <div class="input-group">
+                    <label for="date-input">Analysis Date</label>
+                    <input type="date" id="date-input" value="2026-07-20">
+                </div>
+                <button id="generate-btn" class="primary-btn">Scan Market & Find Best Trade</button>
+            </div>
+
+            <div class="status-panel glass hidden" id="loading-panel">
+                <div class="spinner"></div>
+                <p id="loading-text">Agents are gathering. This may take a minute...</p>
+            </div>
+
+            <div class="results-panel glass hidden" id="results-panel">
+                <div class="signal-header">
+                    <div>
+                        <h2 id="signal-pair" style="color: var(--accent); margin-bottom: 5px;">EUR/USD</h2>
+                        <span style="color: var(--text-secondary); font-size: 0.9rem;">Recommended Trade</span>
+                    </div>
+                    <span class="badge" id="signal-action">BUY</span>
+                </div>
+                
+                <div class="signal-grid">
+                    <div class="metric">
+                        <span class="label">Entry</span>
+                        <strong class="value" id="signal-entry">--</strong>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Take Profit</span>
+                        <strong class="value text-success" id="signal-tp">--</strong>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Stop Loss</span>
+                        <strong class="value text-danger" id="signal-sl">--</strong>
+                    </div>
+                </div>
+
+                <div class="reasoning-box">
+                    <h3>AI Reasoning</h3>
+                    <p id="signal-reasoning">...</p>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
