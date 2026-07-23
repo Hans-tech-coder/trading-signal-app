@@ -141,7 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Dynamic Loading Text
         const phrases = [
             "AI is scanning global forex charts...",
-            "Analyzing Volatility & ATR...",
+            "Calculating 28-Cross Currency Strength Engine...",
             "Checking Currency Strength Matrix...",
             "Calculating VWAP and Bollinger Bands...",
             "Risk Manager is validating safety...",
@@ -189,6 +189,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             updateBadge(data.action);
+            
+            // Display Heatmap
+            if (data.currency_strength && Object.keys(data.currency_strength).length > 0) {
+                const cs = data.currency_strength;
+                if (cs["1H"] && cs["1H"].strongest) {
+                    document.getElementById('heatmap-1h-strong').textContent = `${cs["1H"].strongest} (+${cs["1H"].strongest_val}%)`;
+                    document.getElementById('heatmap-1h-weak').textContent = `${cs["1H"].weakest} (${cs["1H"].weakest_val}%)`;
+                }
+                if (cs["4H"] && cs["4H"].strongest) {
+                    document.getElementById('heatmap-4h-strong').textContent = `${cs["4H"].strongest} (+${cs["4H"].strongest_val}%)`;
+                    document.getElementById('heatmap-4h-weak').textContent = `${cs["4H"].weakest} (${cs["4H"].weakest_val}%)`;
+                }
+                if (cs["24H"] && cs["24H"].strongest) {
+                    document.getElementById('heatmap-24h-strong').textContent = `${cs["24H"].strongest} (+${cs["24H"].strongest_val}%)`;
+                    document.getElementById('heatmap-24h-weak').textContent = `${cs["24H"].weakest} (${cs["24H"].weakest_val}%)`;
+                }
+                document.getElementById('heatmap-panel').style.display = 'block';
+            }
 
             clearInterval(phraseInterval);
             loadingPanel.classList.add('hidden');

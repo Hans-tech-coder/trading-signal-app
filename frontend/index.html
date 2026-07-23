@@ -32,6 +32,37 @@
                 <button id="generate-btn" class="primary-btn">Scan Market & Find Best Trade</button>
             </div>
 
+            <!-- Currency Strength Heatmap -->
+            <div class="heatmap-panel glass" id="heatmap-panel" style="margin-bottom: 2rem; display: none;">
+                <h2 style="color: var(--accent); margin-bottom: 1rem;">Live Currency Heatmap (28-Cross)</h2>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
+                    <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Intraday Momentum (1H)</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong style="color: var(--success);" id="heatmap-1h-strong">--</strong>
+                            <span style="color: #666;">vs</span>
+                            <strong style="color: var(--danger);" id="heatmap-1h-weak">--</strong>
+                        </div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Short-Term Trend (4H)</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong style="color: var(--success);" id="heatmap-4h-strong">--</strong>
+                            <span style="color: #666;">vs</span>
+                            <strong style="color: var(--danger);" id="heatmap-4h-weak">--</strong>
+                        </div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Daily Flow (24H)</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong style="color: var(--success);" id="heatmap-24h-strong">--</strong>
+                            <span style="color: #666;">vs</span>
+                            <strong style="color: var(--danger);" id="heatmap-24h-weak">--</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="stats-panel glass" id="stats-panel" style="margin-bottom: 2rem;">
                 <div class="stats-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                     <h2 style="color: var(--accent); margin: 0;">Win Rate Analytics</h2>

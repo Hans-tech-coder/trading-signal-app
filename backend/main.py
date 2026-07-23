@@ -153,33 +153,67 @@ def calculate_bollinger_bands(ticker_symbol: str, period: int = 20) -> tuple:
     except Exception:
         return (0.0, 0.0, 0.0)
 
-def calculate_currency_strength() -> str:
-    """Returns a string indicating the strongest and weakest currencies based on 1-day change."""
+def calculate_currency_strength() -> dict:
+    """Returns currency strength across multiple timeframes (1H, 4H, 24H)."""
     currencies = {
         "EUR": "EURUSD=X",
         "GBP": "GBPUSD=X",
         "AUD": "AUDUSD=X",
-        "JPY": "JPY=X" # USDJPY inverse
+        "JPY": "JPY=X", # USDJPY inverse
+        "CAD": "CAD=X", # USDCAD inverse
+        "CHF": "CHF=X", # USDCHF inverse
+        "NZD": "NZDUSD=X"
     }
-    performance = {}
+    
+    timeframes = {
+        "1H": {"period": "2d", "interval": "1h", "lookback": 1},
+        "4H": {"period": "5d", "interval": "1h", "lookback": 4},
+        "24H": {"period": "1mo", "interval": "1d", "lookback": 1}
+    }
+    
+    results = {"1H": {}, "4H": {}, "24H": {}}
+    
     try:
+        # Pre-fetch data to avoid multiple calls per currency per timeframe
+        hist_data = {}
         for cur, symbol in currencies.items():
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="2d")
-            if len(hist) >= 2:
-                change = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]
-                if cur == "JPY": change = -change # Inverse for USDJPY
-                performance[cur] = change
+            # Fetch 1h data
+            hist_1h = ticker.history(period="5d", interval="1h")
+            # Fetch 1d data
+            hist_1d = ticker.history(period="1mo", interval="1d")
+            hist_data[cur] = {"1h": hist_1h, "1d": hist_1d}
+
+        for tf_name, tf_config in timeframes.items():
+            performance = {}
+            for cur, data in hist_data.items():
+                hist = data["1h"] if tf_config["interval"] == "1h" else data["1d"]
+                lookback = tf_config["lookback"]
+                if len(hist) > lookback:
+                    start_price = hist['Close'].iloc[-(lookback + 1)]
+                    end_price = hist['Close'].iloc[-1]
+                    change = (end_price - start_price) / start_price
+                    if cur in ["JPY", "CAD", "CHF"]: 
+                        change = -change # Inverse for USD base pairs
+                    performance[cur] = round(float(change) * 100, 3) # As percentage
+            
+            # USD performance is inverse of average of others
+            if performance:
+                performance["USD"] = round(float(-sum(performance.values()) / len(performance)), 3)
                 
-        # USD performance is inverse of average of others
-        performance["USD"] = -sum(performance.values()) / len(performance)
-        
-        sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
-        strongest = sorted_perf[0][0]
-        weakest = sorted_perf[-1][0]
-        return f"Strongest: {strongest}, Weakest: {weakest}"
-    except Exception:
-        return "Strength Data Unavailable"
+            sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
+            if sorted_perf:
+                results[tf_name] = {
+                    "strongest": sorted_perf[0][0],
+                    "strongest_val": float(sorted_perf[0][1]),
+                    "weakest": sorted_perf[-1][0],
+                    "weakest_val": float(sorted_perf[-1][1]),
+                    "all": {k: float(v) for k, v in sorted_perf}
+                }
+        return results
+    except Exception as e:
+        print(f"Error calculating currency strength: {e}")
+        return {}
 
 def run_tv_command(command_args):
     """Run a TradingView MCP CLI command and return JSON."""
@@ -212,13 +246,41 @@ async def scan_and_signal(req: ScanRequest):
     tv_symbol = best_pair.replace("=X", "")
 
     try:
+        # Calculate Currency Strength FIRST to determine dynamic timeframe
+        print("      Calculating Currency Strength...")
+        currency_strength = calculate_currency_strength()
+        
+        # Determine dynamic timeframe based on best_pair divergence
+        tv_tf = "240" # Default 4H
+        tf_label = "4-Hour"
+        base_cur = tv_symbol[:3]
+        quote_cur = tv_symbol[3:]
+        
+        if currency_strength and base_cur in currency_strength["1H"].get("all", {}) and quote_cur in currency_strength["1H"].get("all", {}):
+            diff_1h = abs(currency_strength["1H"]["all"][base_cur] - currency_strength["1H"]["all"][quote_cur])
+            diff_4h = abs(currency_strength["4H"]["all"][base_cur] - currency_strength["4H"]["all"][quote_cur])
+            diff_24h = abs(currency_strength["24H"]["all"][base_cur] - currency_strength["24H"]["all"][quote_cur])
+            
+            max_diff = max(diff_1h, diff_4h, diff_24h)
+            if max_diff == diff_1h:
+                tv_tf = "60"
+                tf_label = "1-Hour"
+            elif max_diff == diff_4h:
+                tv_tf = "240"
+                tf_label = "4-Hour"
+            else:
+                tv_tf = "1D"
+                tf_label = "Daily"
+                
+        print(f"      Selected dynamic timeframe: {tf_label} ({tv_tf}) based on momentum divergence.")
+
         # 2. Control TradingView via MCP CLI
-        print(f"[2/4] Connecting to TradingView Desktop for {tv_symbol}...")
+        print(f"[2/4] Connecting to TradingView Desktop for {tv_symbol} on {tf_label}...")
         # Set Symbol
         run_tv_command(["symbol", tv_symbol])
         
-        # Set Timeframe to 4-Hour
-        run_tv_command(["timeframe", "240"])
+        # Set Timeframe Dynamically
+        run_tv_command(["timeframe", tv_tf])
         
         # Get Quote
         quote_data = run_tv_command(["quote"])
@@ -245,7 +307,6 @@ async def scan_and_signal(req: ScanRequest):
         print("      Calculating Advanced Indicators...")
         vwap = calculate_vwap(best_pair)
         bb_upper, bb_mid, bb_lower = calculate_bollinger_bands(best_pair)
-        currency_strength = calculate_currency_strength()
         
         print("      Fetching Retail Sentiment from Myfxbook...")
         sentiment_data = sentiment.get_myfxbook_sentiment(best_pair)
@@ -257,19 +318,28 @@ async def scan_and_signal(req: ScanRequest):
             
         print(f"      VWAP: {vwap}")
         print(f"      Bollinger Bands: Upper={bb_upper}, Mid={bb_mid}, Lower={bb_lower}")
-        print(f"      Currency Strength: {currency_strength}")
+        
+        cs_str_list = []
+        if currency_strength:
+            for tf, data in currency_strength.items():
+                if "strongest" in data:
+                    cs_str_list.append(f"[{tf}] Strongest: {data['strongest']} (+{data['strongest_val']}%), Weakest: {data['weakest']} ({data['weakest_val']}%)")
+        cs_overview = " | ".join(cs_str_list) if cs_str_list else "Data Unavailable"
+        
+        print(f"      Currency Strength: {cs_overview}")
         print(f"      {sentiment_str}")
 
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
         prompt = f"""
 You are an expert forex and commodities trader. 
-I am providing you with a screenshot of the current 4-Hour chart for {tv_symbol} directly from TradingView.
+I am providing you with a screenshot of the current {tf_label} chart for {tv_symbol} directly from TradingView.
+We dynamically selected the {tf_label} timeframe because our Currency Strength Engine detected the highest divergence/momentum for {tv_symbol} on this timeframe.
 The current price is {current_price}.
 The current Daily Average True Range (ATR) volatility is {current_atr}.
 The recent Volume Weighted Average Price (VWAP) is {vwap}.
 Bollinger Bands (20-day): Upper={bb_upper}, Middle={bb_mid}, Lower={bb_lower}.
-Currency Strength Overview (1-Day): {currency_strength}.
+Currency Strength Overview (Multi-Timeframe): {cs_overview}.
 {sentiment_str}.
 
 Analyze the visual chart, paying close attention to:
@@ -378,7 +448,8 @@ Output your response STRICTLY as a JSON object with the following schema:
             "sl": sl,
             "lot_size": lot_size,
             "rrr": rrr,
-            "reasoning": reasoning
+            "reasoning": reasoning,
+            "currency_strength": currency_strength
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
