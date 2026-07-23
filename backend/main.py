@@ -37,6 +37,8 @@ app.add_middleware(
 
 class ScanRequest(BaseModel):
     date: str
+    account_balance: float = 1000.0
+    risk_percentage: float = 1.0
 
 MAJOR_PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "XAUUSD=X"]
 
@@ -85,6 +87,88 @@ def calculate_atr(ticker_symbol: str, period: int = 14) -> float:
     except Exception as e:
         print(f"Error calculating ATR for {ticker_symbol}: {e}")
         return 0.0
+
+def calculate_lot_size(account_balance: float, risk_pct: float, stop_loss_pips: float, pair: str) -> float:
+    """Calculates MT5 lot size based on risk parameters."""
+    if stop_loss_pips <= 0:
+        return 0.01
+    
+    risk_amount = account_balance * (risk_pct / 100.0)
+    
+    # Standard lot size is 100,000 units. 
+    # For pairs ending in USD (like EURUSD, XAUUSD), 1 pip = $10 per standard lot.
+    # For JPY pairs, it varies, but we'll use a simplified baseline of $10 per pip per lot for now
+    # to keep it straightforward, or adjust if we want exact precision.
+    pip_value_per_lot = 10.0
+    if "JPY" in pair:
+        pip_value_per_lot = 1000 / 150.0 # Approximate JPY rate
+    elif "XAUUSD" in pair:
+        pip_value_per_lot = 100.0 # Gold pip value is often $1 per 0.01 lot -> $100 per 1.0 lot (standard points)
+        
+    lot_size = risk_amount / (stop_loss_pips * pip_value_per_lot)
+    
+    # Cap at standard MT5 limits (0.01 to 100)
+    lot_size = max(0.01, min(round(lot_size, 2), 100.0))
+    return lot_size
+
+def calculate_vwap(ticker_symbol: str) -> float:
+    """Calculates recent VWAP."""
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        hist = ticker.history(period="5d", interval="1h")
+        if hist.empty: return 0.0
+        
+        hist['Typical_Price'] = (hist['High'] + hist['Low'] + hist['Close']) / 3
+        hist['VP'] = hist['Typical_Price'] * hist['Volume']
+        
+        vwap = hist['VP'].sum() / hist['Volume'].sum() if hist['Volume'].sum() > 0 else hist['Close'].iloc[-1]
+        return round(float(vwap), 5)
+    except Exception:
+        return 0.0
+
+def calculate_bollinger_bands(ticker_symbol: str, period: int = 20) -> tuple:
+    """Returns (Upper Band, Middle Band, Lower Band)"""
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        hist = ticker.history(period="1mo")
+        if len(hist) < period: return (0.0, 0.0, 0.0)
+        
+        sma = hist['Close'].rolling(period).mean().iloc[-1]
+        std = hist['Close'].rolling(period).std().iloc[-1]
+        
+        upper = sma + (std * 2)
+        lower = sma - (std * 2)
+        return round(float(upper), 5), round(float(sma), 5), round(float(lower), 5)
+    except Exception:
+        return (0.0, 0.0, 0.0)
+
+def calculate_currency_strength() -> str:
+    """Returns a string indicating the strongest and weakest currencies based on 1-day change."""
+    currencies = {
+        "EUR": "EURUSD=X",
+        "GBP": "GBPUSD=X",
+        "AUD": "AUDUSD=X",
+        "JPY": "JPY=X" # USDJPY inverse
+    }
+    performance = {}
+    try:
+        for cur, symbol in currencies.items():
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="2d")
+            if len(hist) >= 2:
+                change = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]
+                if cur == "JPY": change = -change # Inverse for USDJPY
+                performance[cur] = change
+                
+        # USD performance is inverse of average of others
+        performance["USD"] = -sum(performance.values()) / len(performance)
+        
+        sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
+        strongest = sorted_perf[0][0]
+        weakest = sorted_perf[-1][0]
+        return f"Strongest: {strongest}, Weakest: {weakest}"
+    except Exception:
+        return "Strength Data Unavailable"
 
 def run_tv_command(command_args):
     """Run a TradingView MCP CLI command and return JSON."""
@@ -146,6 +230,16 @@ async def scan_and_signal(req: ScanRequest):
         current_atr = calculate_atr(best_pair)
         print(f"      Current Daily ATR: {current_atr}")
 
+        # Get Advanced Technical Indicators
+        print("      Calculating Advanced Indicators...")
+        vwap = calculate_vwap(best_pair)
+        bb_upper, bb_mid, bb_lower = calculate_bollinger_bands(best_pair)
+        currency_strength = calculate_currency_strength()
+        
+        print(f"      VWAP: {vwap}")
+        print(f"      Bollinger Bands: Upper={bb_upper}, Mid={bb_mid}, Lower={bb_lower}")
+        print(f"      Currency Strength: {currency_strength}")
+
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
         prompt = f"""
@@ -153,6 +247,9 @@ You are an expert forex and commodities trader.
 I am providing you with a screenshot of the current 4-Hour chart for {tv_symbol} directly from TradingView.
 The current price is {current_price}.
 The current Daily Average True Range (ATR) volatility is {current_atr}.
+The recent Volume Weighted Average Price (VWAP) is {vwap}.
+Bollinger Bands (20-day): Upper={bb_upper}, Middle={bb_mid}, Lower={bb_lower}.
+Currency Strength Overview (1-Day): {currency_strength}.
 
 Analyze the visual chart, paying close attention to:
 - Candlestick patterns
@@ -160,8 +257,9 @@ Analyze the visual chart, paying close attention to:
 - Any visible indicators (moving averages, oscillators, custom scripts)
 - Trend direction
 
-Based on this visual evidence and the provided ATR volatility metric, provide a trading signal.
-Use the ATR to dynamically set logical Take Profit (TP) and Stop Loss (SL) levels to avoid market noise and overexposure.
+Based on this visual evidence and the provided mathematical indicators, provide a trading signal.
+Use the ATR, VWAP, and Bollinger Bands to dynamically set logical Take Profit (TP) and Stop Loss (SL) levels to avoid market noise and overexposure.
+CRITICAL: You MUST ensure that the Risk-to-Reward Ratio (RRR) of your selected TP and SL is at least 1:2. If a 1:2 ratio is not possible given the market structure, you MUST return "HOLD".
 
 Output your response STRICTLY as a JSON object with the following schema:
 {{
@@ -169,7 +267,7 @@ Output your response STRICTLY as a JSON object with the following schema:
   "entry": "suggested entry price or '' if HOLD",
   "tp": "suggested take profit or '' if HOLD",
   "sl": "suggested stop loss or '' if HOLD",
-  "reasoning": "A concise 2-3 sentence explanation of what you see on the chart and how you used ATR that justifies this decision."
+  "reasoning": "A concise 2-3 sentence explanation of what you see on the chart and how you used the indicators (ATR, VWAP, etc.) that justifies this decision."
 }}
 """
         # Call Gemini Vision
@@ -215,9 +313,37 @@ Output your response STRICTLY as a JSON object with the following schema:
             sl = ""
             reasoning = "Failed to parse AI visual analysis."
 
+        # Calculate Lot Size and RRR
+        lot_size = 0.0
+        rrr = 0.0
+        if action != "HOLD" and entry and sl and tp:
+            try:
+                entry_f = float(entry)
+                sl_f = float(sl)
+                tp_f = float(tp)
+                
+                # Calculate stop loss distance in "standard points/pips" depending on asset
+                sl_distance = abs(entry_f - sl_f)
+                tp_distance = abs(entry_f - tp_f)
+                
+                if sl_distance > 0:
+                    rrr = round(tp_distance / sl_distance, 2)
+                    # For lot sizing, we need a standardized "pips" measure. 
+                    if tv_symbol == "XAUUSD":
+                        # In gold, 1.00 move is often considered 100 pips.
+                        sl_pips = sl_distance
+                    elif "JPY" in tv_symbol:
+                        sl_pips = sl_distance * 100
+                    else:
+                        sl_pips = sl_distance * 10000
+                        
+                    lot_size = calculate_lot_size(req.account_balance, req.risk_percentage, sl_pips, tv_symbol)
+            except Exception as e:
+                print(f"Error calculating lot size / RRR: {e}")
+
         # Save to Database
         if action != "HOLD":
-            database.save_signal(tv_symbol, action, entry, tp, sl)
+            database.save_signal(tv_symbol, action, entry, tp, sl, lot_size, rrr)
 
         return {
             "status": "success",
@@ -226,6 +352,8 @@ Output your response STRICTLY as a JSON object with the following schema:
             "entry": entry,
             "tp": tp,
             "sl": sl,
+            "lot_size": lot_size,
+            "rrr": rrr,
             "reasoning": reasoning
         }
     except Exception as e:
@@ -237,13 +365,13 @@ def evaluate_trades():
     evaluated = 0
     
     for trade in pending_trades:
-        trade_id = trade[0]
-        date_gen = trade[1]
-        ticker = trade[2]
-        action = trade[3]
-        entry = trade[4]
-        tp = trade[5]
-        sl = trade[6]
+        trade_id = trade["id"]
+        date_gen = trade["date"]
+        ticker = trade["ticker"]
+        action = trade["action"]
+        entry = trade["entry"]
+        tp = trade["tp"]
+        sl = trade["sl"]
         
         # Yahoo finance uses =X for forex
         y_ticker = ticker + "=X"

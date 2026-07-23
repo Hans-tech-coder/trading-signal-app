@@ -51,7 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (t.status === 'LOST') statusColor = 'var(--danger)';
                         
                         li.innerHTML = `
-                            <span>${t.date} <b>${t.ticker}</b> - ${t.action}</span>
+                            <span>${t.date} <b>${t.ticker}</b> - ${t.action} (Lot: ${t.lot_size || 0}, RRR: 1:${t.rrr || 0})</span>
                             <span style="color: ${statusColor}; font-weight: bold;">${t.status}</span>
                         `;
                         list.appendChild(li);
@@ -76,20 +76,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     generateBtn.addEventListener('click', async () => {
         const date = document.getElementById('date-input').value;
+        const balance = parseFloat(document.getElementById('balance-input').value) || 1000;
+        const risk = parseFloat(document.getElementById('risk-input').value) || 1.0;
 
-        // UI State
         resultsPanel.classList.add('hidden');
         loadingPanel.classList.remove('hidden');
-        generateBtn.disabled = true;
 
-        // Fun loading text loop
+        // Dynamic Loading Text
         const phrases = [
-            "Gathering market data...",
-            "Fundamental Analysts are reviewing...",
-            "Technical Analysts are drawing charts...",
-            "Bull and Bear agents are debating...",
+            "AI is scanning global forex charts...",
+            "Analyzing Volatility & ATR...",
+            "Checking Currency Strength Matrix...",
+            "Calculating VWAP and Bollinger Bands...",
             "Risk Manager is validating safety...",
-            "Portfolio Manager is making final decision..."
+            "Computing MT5 Lot Size and RRR..."
         ];
         let phraseIdx = 0;
         const phraseInterval = setInterval(() => {
@@ -103,7 +103,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ date })
+                body: JSON.stringify({ 
+                    date: date,
+                    account_balance: balance,
+                    risk_percentage: risk
+                })
             });
 
             if (!response.ok) {
@@ -119,6 +123,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('signal-entry').textContent = data.entry || (data.action === "HOLD" ? "WAIT" : "Market Price");
             document.getElementById('signal-tp').textContent = data.tp || (data.action === "HOLD" ? "WAIT" : "--");
             document.getElementById('signal-sl').textContent = data.sl || (data.action === "HOLD" ? "WAIT" : "--");
+            document.getElementById('signal-lotsize').textContent = data.lot_size ? data.lot_size : "--";
+            document.getElementById('signal-rrr').textContent = data.rrr ? `1:${data.rrr}` : "--";
 
             if (data.action === "HOLD") {
                 document.getElementById('signal-reasoning').innerHTML = "<b>🚨 NO TRADE TODAY:</b> " + data.reasoning.replace(/\n/g, '<br>');
