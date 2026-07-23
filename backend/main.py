@@ -5,6 +5,7 @@ import os
 import sys
 import re
 import yfinance as yf
+import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -60,8 +61,30 @@ def find_best_pair(date_str: str) -> str:
                     best_pair = pair
         except Exception:
             continue
-            
     return best_pair
+
+def calculate_atr(ticker_symbol: str, period: int = 14) -> float:
+    """Calculates the Average True Range (ATR) to measure volatility."""
+    try:
+        # Fetch enough data to calculate the ATR
+        ticker = yf.Ticker(ticker_symbol)
+        hist = ticker.history(period="1mo") # 1 month is enough for 14-day ATR
+        
+        if len(hist) < period + 1:
+            return 0.0
+            
+        high_low = hist['High'] - hist['Low']
+        high_close = (hist['High'] - hist['Close'].shift()).abs()
+        low_close = (hist['Low'] - hist['Close'].shift()).abs()
+        
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        
+        atr = true_range.rolling(period).mean().iloc[-1]
+        return round(float(atr), 5)
+    except Exception as e:
+        print(f"Error calculating ATR for {ticker_symbol}: {e}")
+        return 0.0
 
 def run_tv_command(command_args):
     """Run a TradingView MCP CLI command and return JSON."""
@@ -118,12 +141,18 @@ async def scan_and_signal(req: ScanRequest):
         with open(file_path, "rb") as f:
             image_bytes = f.read()
 
+        # Get Volatility (ATR)
+        print("      Calculating Current Volatility (ATR)...")
+        current_atr = calculate_atr(best_pair)
+        print(f"      Current Daily ATR: {current_atr}")
+
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
         prompt = f"""
 You are an expert forex and commodities trader. 
-I am providing you with a screenshot of the current Daily chart for {tv_symbol} directly from TradingView.
+I am providing you with a screenshot of the current 4-Hour chart for {tv_symbol} directly from TradingView.
 The current price is {current_price}.
+The current Daily Average True Range (ATR) volatility is {current_atr}.
 
 Analyze the visual chart, paying close attention to:
 - Candlestick patterns
@@ -131,7 +160,8 @@ Analyze the visual chart, paying close attention to:
 - Any visible indicators (moving averages, oscillators, custom scripts)
 - Trend direction
 
-Based on this visual evidence, provide a trading signal.
+Based on this visual evidence and the provided ATR volatility metric, provide a trading signal.
+Use the ATR to dynamically set logical Take Profit (TP) and Stop Loss (SL) levels to avoid market noise and overexposure.
 
 Output your response STRICTLY as a JSON object with the following schema:
 {{
@@ -139,7 +169,7 @@ Output your response STRICTLY as a JSON object with the following schema:
   "entry": "suggested entry price or '' if HOLD",
   "tp": "suggested take profit or '' if HOLD",
   "sl": "suggested stop loss or '' if HOLD",
-  "reasoning": "A concise 2-3 sentence explanation of what you see on the chart that justifies this decision."
+  "reasoning": "A concise 2-3 sentence explanation of what you see on the chart and how you used ATR that justifies this decision."
 }}
 """
         # Call Gemini Vision
