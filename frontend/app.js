@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('date-input').value = today;
 
     const generateBtn = document.getElementById('generate-btn');
+    const refreshStatsBtn = document.getElementById('refresh-stats-btn');
     const loadingPanel = document.getElementById('loading-panel');
     const resultsPanel = document.getElementById('results-panel');
     const loadingText = document.getElementById('loading-text');
@@ -16,6 +17,62 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (action.toLowerCase().includes('sell')) badge.classList.add('sell');
         else badge.classList.add('hold');
     };
+
+    const loadStats = async () => {
+        try {
+            // First, trigger evaluation
+            await fetch('http://127.0.0.1:8000/api/evaluate-trades');
+            
+            // Then fetch stats
+            const response = await fetch('http://127.0.0.1:8000/api/trade-stats');
+            const data = await response.json();
+            
+            if(data.status === "success") {
+                const stats = data.data;
+                document.getElementById('stat-winrate').textContent = stats.win_rate + '%';
+                document.getElementById('stat-total').textContent = stats.total;
+                document.getElementById('stat-won').textContent = stats.won;
+                document.getElementById('stat-lost').textContent = stats.lost;
+                
+                const list = document.getElementById('recent-trades-list');
+                list.innerHTML = '';
+                if(stats.recent_trades.length === 0) {
+                    list.innerHTML = '<li style="color: var(--text-secondary);">No trades yet.</li>';
+                } else {
+                    stats.recent_trades.forEach(t => {
+                        const li = document.createElement('li');
+                        li.style.padding = '0.5rem 0';
+                        li.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+                        li.style.display = 'flex';
+                        li.style.justifyContent = 'space-between';
+                        
+                        let statusColor = 'var(--text-secondary)';
+                        if (t.status === 'WON') statusColor = 'var(--success)';
+                        if (t.status === 'LOST') statusColor = 'var(--danger)';
+                        
+                        li.innerHTML = `
+                            <span>${t.date} <b>${t.ticker}</b> - ${t.action}</span>
+                            <span style="color: ${statusColor}; font-weight: bold;">${t.status}</span>
+                        `;
+                        list.appendChild(li);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error("Error loading stats:", error);
+        }
+    };
+
+    // Load stats on app startup
+    loadStats();
+
+    refreshStatsBtn.addEventListener('click', async () => {
+        refreshStatsBtn.textContent = 'Refreshing...';
+        refreshStatsBtn.disabled = true;
+        await loadStats();
+        refreshStatsBtn.textContent = 'Refresh & Evaluate';
+        refreshStatsBtn.disabled = false;
+    });
 
     generateBtn.addEventListener('click', async () => {
         const date = document.getElementById('date-input').value;
@@ -74,6 +131,9 @@ document.addEventListener('DOMContentLoaded', () => {
             clearInterval(phraseInterval);
             loadingPanel.classList.add('hidden');
             resultsPanel.classList.remove('hidden');
+            
+            // Refresh stats after new trade
+            loadStats();
 
         } catch (error) {
             clearInterval(phraseInterval);

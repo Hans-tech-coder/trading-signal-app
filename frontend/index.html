@@ -23,6 +23,37 @@
                 <button id="generate-btn" class="primary-btn">Scan Market & Find Best Trade</button>
             </div>
 
+            <div class="stats-panel glass" id="stats-panel" style="margin-bottom: 2rem;">
+                <div class="stats-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="color: var(--accent); margin: 0;">Win Rate Analytics</h2>
+                    <button id="refresh-stats-btn" class="secondary-btn" style="padding: 0.5rem 1rem; border-radius: 6px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: white; cursor: pointer;">Refresh & Evaluate</button>
+                </div>
+                <div class="stats-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; text-align: center;">
+                    <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span class="label" style="display: block; font-size: 0.8rem; color: var(--text-secondary);">Win Rate</span>
+                        <strong class="value" id="stat-winrate" style="font-size: 1.5rem; color: #fff;">--%</strong>
+                    </div>
+                    <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span class="label" style="display: block; font-size: 0.8rem; color: var(--text-secondary);">Total Trades</span>
+                        <strong class="value" id="stat-total" style="font-size: 1.5rem; color: #fff;">--</strong>
+                    </div>
+                    <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span class="label" style="display: block; font-size: 0.8rem; color: var(--text-secondary);">Won</span>
+                        <strong class="value text-success" id="stat-won" style="font-size: 1.5rem; color: var(--success);">--</strong>
+                    </div>
+                    <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span class="label" style="display: block; font-size: 0.8rem; color: var(--text-secondary);">Lost</span>
+                        <strong class="value text-danger" id="stat-lost" style="font-size: 1.5rem; color: var(--danger);">--</strong>
+                    </div>
+                </div>
+                <div class="recent-trades">
+                    <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--text-secondary);">Recent Signals</h3>
+                    <ul id="recent-trades-list" style="list-style: none; padding: 0; margin: 0; font-size: 0.9rem;">
+                        <li style="color: var(--text-secondary);">Loading...</li>
+                    </ul>
+                </div>
+            </div>
+
             <div class="status-panel glass hidden" id="loading-panel">
                 <div class="spinner"></div>
                 <p id="loading-text">Agents are gathering. This may take a minute...</p>

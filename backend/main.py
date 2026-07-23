@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types
 import subprocess
 import json
+import database
 
 # Setup Gemini Client
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -36,7 +37,7 @@ app.add_middleware(
 class ScanRequest(BaseModel):
     date: str
 
-MAJOR_PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "GC=F"]
+MAJOR_PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "XAUUSD=X"]
 
 def find_best_pair(date_str: str) -> str:
     """Finds the most volatile/momentum-driven pair over the last 5 days."""
@@ -91,8 +92,6 @@ async def scan_and_signal(req: ScanRequest):
     
     # Convert yahoo symbol to TradingView symbol (Basic mapping)
     tv_symbol = best_pair.replace("=X", "")
-    if tv_symbol == "GC=F":
-        tv_symbol = "GOLD"
 
     try:
         # 2. Control TradingView via MCP CLI
@@ -100,8 +99,8 @@ async def scan_and_signal(req: ScanRequest):
         # Set Symbol
         run_tv_command(["symbol", tv_symbol])
         
-        # Set Timeframe to Daily
-        run_tv_command(["timeframe", "D"])
+        # Set Timeframe to 4-Hour
+        run_tv_command(["timeframe", "240"])
         
         # Get Quote
         quote_data = run_tv_command(["quote"])
@@ -186,6 +185,10 @@ Output your response STRICTLY as a JSON object with the following schema:
             sl = ""
             reasoning = "Failed to parse AI visual analysis."
 
+        # Save to Database
+        if action != "HOLD":
+            database.save_signal(tv_symbol, action, entry, tp, sl)
+
         return {
             "status": "success",
             "ticker": tv_symbol,
@@ -195,6 +198,76 @@ Output your response STRICTLY as a JSON object with the following schema:
             "sl": sl,
             "reasoning": reasoning
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/evaluate-trades")
+def evaluate_trades():
+    pending_trades = database.get_pending_trades()
+    evaluated = 0
+    
+    for trade in pending_trades:
+        trade_id = trade[0]
+        date_gen = trade[1]
+        ticker = trade[2]
+        action = trade[3]
+        entry = trade[4]
+        tp = trade[5]
+        sl = trade[6]
+        
+        # Yahoo finance uses =X for forex
+        y_ticker = ticker + "=X"
+        
+        try:
+            # Fetch data from date_generated to today with 1-hour interval for accurate intraday tracking
+            # Give yfinance a 2-day future buffer to avoid timezone truncation issues with futures
+            end_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+            data = yf.download(y_ticker, start=date_gen, end=end_date, interval="1h", progress=False)
+            
+            # Smart Fallback: If 1H intraday data is missing (common for Futures like Gold), use Daily data
+            if data.empty:
+                data = yf.download(y_ticker, start=date_gen, end=end_date, interval="1d", progress=False)
+            
+            if data.empty:
+                continue
+                
+            highs = data['High'].values
+            lows = data['Low'].values
+            
+            status = "PENDING"
+            for i in range(len(highs)):
+                high = float(highs[i])
+                low = float(lows[i])
+                
+                if action == "BUY":
+                    if high >= tp:
+                        status = "WON"
+                        break
+                    elif low <= sl:
+                        status = "LOST"
+                        break
+                elif action == "SELL":
+                    if low <= tp:
+                        status = "WON"
+                        break
+                    elif high >= sl:
+                        status = "LOST"
+                        break
+                        
+            if status != "PENDING":
+                database.update_trade_status(trade_id, status)
+                evaluated += 1
+                
+        except Exception as e:
+            print(f"Error evaluating trade {trade_id}: {e}")
+            
+    return {"status": "success", "evaluated": evaluated}
+
+@app.get("/api/trade-stats")
+def trade_stats():
+    try:
+        stats = database.get_trade_stats()
+        return {"status": "success", "data": stats}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
