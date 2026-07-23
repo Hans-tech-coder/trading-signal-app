@@ -17,6 +17,7 @@ from google.genai import types
 import subprocess
 import json
 import database
+import sentiment
 
 # Setup Gemini Client
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -236,9 +237,18 @@ async def scan_and_signal(req: ScanRequest):
         bb_upper, bb_mid, bb_lower = calculate_bollinger_bands(best_pair)
         currency_strength = calculate_currency_strength()
         
+        print("      Fetching Retail Sentiment from Myfxbook...")
+        sentiment_data = sentiment.get_myfxbook_sentiment(best_pair)
+        
+        if sentiment_data:
+            sentiment_str = f"Retail Sentiment: {sentiment_data['long_percent']}% Long vs {sentiment_data['short_percent']}% Short (Dominant: {sentiment_data['dominant_bias']})"
+        else:
+            sentiment_str = "Retail Sentiment: Data Unavailable"
+            
         print(f"      VWAP: {vwap}")
         print(f"      Bollinger Bands: Upper={bb_upper}, Mid={bb_mid}, Lower={bb_lower}")
         print(f"      Currency Strength: {currency_strength}")
+        print(f"      {sentiment_str}")
 
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
@@ -250,6 +260,7 @@ The current Daily Average True Range (ATR) volatility is {current_atr}.
 The recent Volume Weighted Average Price (VWAP) is {vwap}.
 Bollinger Bands (20-day): Upper={bb_upper}, Middle={bb_mid}, Lower={bb_lower}.
 Currency Strength Overview (1-Day): {currency_strength}.
+{sentiment_str}.
 
 Analyze the visual chart, paying close attention to:
 - Candlestick patterns
@@ -259,7 +270,10 @@ Analyze the visual chart, paying close attention to:
 
 Based on this visual evidence and the provided mathematical indicators, provide a trading signal.
 Use the ATR, VWAP, and Bollinger Bands to dynamically set logical Take Profit (TP) and Stop Loss (SL) levels to avoid market noise and overexposure.
-CRITICAL: You MUST ensure that the Risk-to-Reward Ratio (RRR) of your selected TP and SL is at least 1:2. If a 1:2 ratio is not possible given the market structure, you MUST return "HOLD".
+
+CRITICAL CONTRARIAN RULE: Use the Retail Sentiment data as a contrarian filter to avoid traps. If retail sentiment is heavily skewed (>65%) in one direction, you should strongly bias your trading signal toward the OPPOSITE direction (e.g., if >70% are Long, bias toward SHORT/SELL) or return "HOLD" if the chart does not support the contrarian view. Do not trade with the retail herd.
+
+CRITICAL RISK RULE: You MUST ensure that the Risk-to-Reward Ratio (RRR) of your selected TP and SL is at least 1:2. If a 1:2 ratio is not possible given the market structure, you MUST return "HOLD".
 
 Output your response STRICTLY as a JSON object with the following schema:
 {{
