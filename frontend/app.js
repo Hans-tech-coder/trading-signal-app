@@ -9,6 +9,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsPanel = document.getElementById('results-panel');
     const loadingText = document.getElementById('loading-text');
 
+    let winRateChartInstance = null; // To store chart instance and destroy it on reload
+
     const updateBadge = (action) => {
         const badge = document.getElementById('signal-action');
         badge.textContent = action.toUpperCase();
@@ -58,9 +60,63 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 }
             }
+
+            // Also load Advanced Analytics (Chart)
+            const analyticsResponse = await fetch('http://127.0.0.1:8000/api/analytics');
+            const analyticsData = await analyticsResponse.json();
+            
+            if(analyticsData.status === "success" && Object.keys(analyticsData.data.asset_performance).length > 0) {
+                renderWinRateChart(analyticsData.data.asset_performance);
+            }
+
         } catch (error) {
             console.error("Error loading stats:", error);
         }
+    };
+
+    const renderWinRateChart = (performanceData) => {
+        const ctx = document.getElementById('winRateChart').getContext('2d');
+        
+        const labels = Object.keys(performanceData);
+        const data = Object.values(performanceData).map(d => d.win_rate);
+        
+        if (winRateChartInstance) {
+            winRateChartInstance.destroy();
+        }
+        
+        winRateChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Win Rate (%)',
+                    data: data,
+                    backgroundColor: 'rgba(99, 102, 241, 0.5)',
+                    borderColor: 'rgba(99, 102, 241, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#888' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#888' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
     };
 
     // Load stats on app startup
@@ -149,4 +205,42 @@ document.addEventListener('DOMContentLoaded', () => {
             generateBtn.disabled = false;
         }
     });
+
+    // AI Mentor Logic
+    const askMentorBtn = document.getElementById('ask-mentor-btn');
+    const mentorBox = document.getElementById('mentor-feedback-box');
+    const mentorText = document.getElementById('mentor-text');
+
+    askMentorBtn.addEventListener('click', async () => {
+        askMentorBtn.disabled = true;
+        askMentorBtn.textContent = 'Consulting AI...';
+        mentorBox.style.display = 'block';
+        mentorText.textContent = 'Coach is analyzing your trade history...';
+
+        try {
+            const response = await fetch('http://127.0.0.1:8000/api/ai-mentor');
+            const data = await response.json();
+            
+            if(data.status === "success") {
+                mentorText.innerHTML = marked(data.feedback) || data.feedback; 
+            } else {
+                mentorText.textContent = "Error getting feedback.";
+            }
+        } catch (error) {
+            mentorText.textContent = "Failed to connect to AI Mentor.";
+        } finally {
+            askMentorBtn.disabled = false;
+            askMentorBtn.textContent = 'Ask Mentor AI';
+        }
+    });
+
+    // Simple markdown parser for the mentor text since we requested markdown
+    const marked = (text) => {
+        if (!text) return text;
+        return text
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/\n\n/g, '<br><br>')
+            .replace(/\n/g, '<br>');
+    };
 });

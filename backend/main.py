@@ -43,6 +43,12 @@ class ScanRequest(BaseModel):
 
 MAJOR_PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "XAUUSD=X"]
 
+def get_yf_symbol(symbol: str) -> str:
+    """Helper to map symbols for Yahoo Finance, particularly Gold which is often GC=F."""
+    if symbol == "XAUUSD=X":
+        return "GC=F"
+    return symbol
+
 def find_best_pair(date_str: str) -> str:
     """Finds the most volatile/momentum-driven pair over the last 5 days."""
     best_pair = MAJOR_PAIRS[0]
@@ -53,7 +59,8 @@ def find_best_pair(date_str: str) -> str:
     
     for pair in MAJOR_PAIRS:
         try:
-            ticker = yf.Ticker(pair)
+            yf_sym = get_yf_symbol(pair)
+            ticker = yf.Ticker(yf_sym)
             hist = ticker.history(start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d"))
             if len(hist) >= 2:
                 start_price = hist['Close'].iloc[0]
@@ -70,7 +77,8 @@ def calculate_atr(ticker_symbol: str, period: int = 14) -> float:
     """Calculates the Average True Range (ATR) to measure volatility."""
     try:
         # Fetch enough data to calculate the ATR
-        ticker = yf.Ticker(ticker_symbol)
+        yf_sym = get_yf_symbol(ticker_symbol)
+        ticker = yf.Ticker(yf_sym)
         hist = ticker.history(period="1mo") # 1 month is enough for 14-day ATR
         
         if len(hist) < period + 1:
@@ -115,7 +123,8 @@ def calculate_lot_size(account_balance: float, risk_pct: float, stop_loss_pips: 
 def calculate_vwap(ticker_symbol: str) -> float:
     """Calculates recent VWAP."""
     try:
-        ticker = yf.Ticker(ticker_symbol)
+        yf_sym = get_yf_symbol(ticker_symbol)
+        ticker = yf.Ticker(yf_sym)
         hist = ticker.history(period="5d", interval="1h")
         if hist.empty: return 0.0
         
@@ -130,7 +139,8 @@ def calculate_vwap(ticker_symbol: str) -> float:
 def calculate_bollinger_bands(ticker_symbol: str, period: int = 20) -> tuple:
     """Returns (Upper Band, Middle Band, Lower Band)"""
     try:
-        ticker = yf.Ticker(ticker_symbol)
+        yf_sym = get_yf_symbol(ticker_symbol)
+        ticker = yf.Ticker(yf_sym)
         hist = ticker.history(period="1mo")
         if len(hist) < period: return (0.0, 0.0, 0.0)
         
@@ -389,16 +399,17 @@ def evaluate_trades():
         
         # Yahoo finance uses =X for forex
         y_ticker = ticker + "=X"
+        yf_sym = get_yf_symbol(y_ticker)
         
         try:
             # Fetch data from date_generated to today with 1-hour interval for accurate intraday tracking
             # Give yfinance a 2-day future buffer to avoid timezone truncation issues with futures
             end_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
-            data = yf.download(y_ticker, start=date_gen, end=end_date, interval="1h", progress=False)
+            data = yf.download(yf_sym, start=date_gen, end=end_date, interval="1h", progress=False)
             
             # Smart Fallback: If 1H intraday data is missing (common for Futures like Gold), use Daily data
             if data.empty:
-                data = yf.download(y_ticker, start=date_gen, end=end_date, interval="1d", progress=False)
+                data = yf.download(yf_sym, start=date_gen, end=end_date, interval="1d", progress=False)
             
             if data.empty:
                 continue
@@ -408,8 +419,13 @@ def evaluate_trades():
             
             status = "PENDING"
             for i in range(len(highs)):
-                high = float(highs[i])
-                low = float(lows[i])
+                # highs[i] could be a scalar or a 1D array depending on pandas version
+                high_val = highs[i]
+                low_val = lows[i]
+                
+                # Safely extract scalar value
+                high = float(high_val.item() if hasattr(high_val, 'item') else high_val)
+                low = float(low_val.item() if hasattr(low_val, 'item') else low_val)
                 
                 if action == "BUY":
                     if high >= tp:
@@ -442,4 +458,47 @@ def trade_stats():
         return {"status": "success", "data": stats}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analytics")
+def get_analytics():
+    try:
+        data = database.get_advanced_analytics()
+        return {"status": "success", "data": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ai-mentor")
+def ask_ai_mentor():
+    try:
+        trades = database.get_all_trades_for_mentor()
+        if not trades:
+            return {"status": "success", "feedback": "You don't have enough completed trades yet. Keep trading so I can analyze your patterns!"}
+        
+        # Format trades for the prompt
+        trade_history_str = json.dumps(trades, indent=2)
+        
+        prompt = f"""
+You are an elite trading psychology coach and AI mentor.
+I am providing you with the user's recent trade history (JSON format).
+
+Analyze this data and provide a personalized 3-paragraph coaching summary:
+1. Identify any recurring patterns in their winning vs losing trades (e.g., are they losing more on a specific pair? Are their stop losses too tight?).
+2. Evaluate their Risk-to-Reward Ratio (RRR) discipline.
+3. Provide an actionable piece of advice to improve their performance next week.
+
+CRITICAL: Format your response as clean markdown. Keep it encouraging but strictly data-driven. Do not hallucinate data.
+
+Trade History:
+{trade_history_str}
+"""
+        
+        response = client.models.generate_content(
+            model='gemini-3.1-pro-preview',
+            contents=[prompt]
+        )
+        
+        return {"status": "success", "feedback": response.text}
+    except Exception as e:
+        print(f"AI Mentor Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate AI mentor feedback.")
 
