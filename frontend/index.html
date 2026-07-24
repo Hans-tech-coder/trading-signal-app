@@ -32,6 +32,18 @@
                 <button id="generate-btn" class="primary-btn">Scan Market & Find Best Trade</button>
             </div>
 
+            <!-- Macro & News Status Panel -->
+            <div class="macro-panel glass" id="macro-panel" style="margin-bottom: 2rem; display: none; padding: 1.5rem; border-radius: 12px; background: rgba(255, 255, 255, 0.05); border-left: 4px solid var(--accent);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <h2 style="color: var(--accent); margin: 0; font-size: 1.2rem;">Macro & News Status</h2>
+                    <span id="news-status-badge" style="padding: 0.3rem 0.8rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; background: var(--success); color: white;">Clear</span>
+                </div>
+                <div style="margin-top: 1rem;">
+                    <p style="margin: 0 0 0.5rem 0; font-size: 0.9rem; color: var(--text-secondary);"><strong>Upcoming High-Impact News:</strong> <span id="news-message" style="color: white;">--</span></p>
+                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);"><strong>Central Bank Rates:</strong> <span id="macro-message" style="color: white;">--</span></p>
+                </div>
+            </div>
+
             <!-- Currency Strength Heatmap -->
             <div class="heatmap-panel glass" id="heatmap-panel" style="margin-bottom: 2rem; display: none;">
                 <h2 style="color: var(--accent); margin-bottom: 1rem;">Live Currency Heatmap (28-Cross)</h2>

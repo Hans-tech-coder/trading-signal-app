@@ -18,6 +18,7 @@ import subprocess
 import json
 import database
 import sentiment
+import news_engine
 
 # Setup Gemini Client
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -316,6 +317,16 @@ async def scan_and_signal(req: ScanRequest):
         else:
             sentiment_str = "Retail Sentiment: Data Unavailable"
             
+        print("      Checking Economic Calendar and Macro Context...")
+        news_check = news_engine.check_upcoming_news(tv_symbol)
+        cb_rates = news_engine.get_central_bank_rates()
+        base_rate = cb_rates.get(base_cur, "N/A")
+        quote_rate = cb_rates.get(quote_cur, "N/A")
+        macro_str = f"Central Bank Rates: {base_cur} ({base_rate}%) vs {quote_cur} ({quote_rate}%)"
+        
+        print(f"      {macro_str}")
+        print(f"      News Status: {news_check['message']}")
+            
         print(f"      VWAP: {vwap}")
         print(f"      Bollinger Bands: Upper={bb_upper}, Mid={bb_mid}, Lower={bb_lower}")
         
@@ -331,6 +342,8 @@ async def scan_and_signal(req: ScanRequest):
 
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
+        current_time_str = datetime.now().strftime("%I:%M %p (Local Time)")
+        
         prompt = f"""
 You are an expert forex and commodities trader. 
 I am providing you with a screenshot of the current {tf_label} chart for {tv_symbol} directly from TradingView.
@@ -340,7 +353,11 @@ The current Daily Average True Range (ATR) volatility is {current_atr}.
 The recent Volume Weighted Average Price (VWAP) is {vwap}.
 Bollinger Bands (20-day): Upper={bb_upper}, Middle={bb_mid}, Lower={bb_lower}.
 Currency Strength Overview (Multi-Timeframe): {cs_overview}.
+{macro_str}.
 {sentiment_str}.
+
+NEWS STATUS: {news_check['message']}
+CURRENT LOCAL TIME: {current_time_str}
 
 Analyze the visual chart, paying close attention to:
 - Candlestick patterns
@@ -352,6 +369,10 @@ Based on this visual evidence and the provided mathematical indicators, provide 
 Use the ATR, VWAP, and Bollinger Bands to dynamically set logical Take Profit (TP) and Stop Loss (SL) levels to avoid market noise and overexposure.
 
 CRITICAL CONTRARIAN RULE: Use the Retail Sentiment data as a contrarian filter to avoid traps. If retail sentiment is heavily skewed (>65%) in one direction, you should strongly bias your trading signal toward the OPPOSITE direction (e.g., if >70% are Long, bias toward SHORT/SELL) or return "HOLD" if the chart does not support the contrarian view. Do not trade with the retail herd.
+
+CRITICAL TREND RULE: Do NOT attempt to "catch falling knives" or "stand in front of a freight train". If the price action is in a strong, established downtrend (consistently trading below the VWAP and Middle Bollinger Band), you MUST look for SELL setups or HOLD. Do not issue a BUY signal against a strong downtrend. Conversely, do not SELL into a strong uptrend.
+
+CRITICAL NEWS RULE: If the NEWS STATUS above contains a "HIGH IMPACT NEWS WARNING", compare the news time to the CURRENT LOCAL TIME. If the news event has ALREADY PASSED today, the whipsaw risk has subsided, and you may proceed with generating a BUY or SELL signal based on technicals. However, if the high-impact news is still UPCOMING later today, you MUST return "HOLD" to avoid whipsaws.
 
 CRITICAL RISK RULE: You MUST ensure that the Risk-to-Reward Ratio (RRR) of your selected TP and SL is at least 1:2. If a 1:2 ratio is not possible given the market structure, you MUST return "HOLD".
 
@@ -449,7 +470,9 @@ Output your response STRICTLY as a JSON object with the following schema:
             "lot_size": lot_size,
             "rrr": rrr,
             "reasoning": reasoning,
-            "currency_strength": currency_strength
+            "currency_strength": currency_strength,
+            "news_status": news_check,
+            "macro": macro_str
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

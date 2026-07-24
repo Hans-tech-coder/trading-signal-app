@@ -143,6 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
             "AI is scanning global forex charts...",
             "Calculating 28-Cross Currency Strength Engine...",
             "Checking Currency Strength Matrix...",
+            "Checking Economic Calendar & Macro Events...",
             "Calculating VWAP and Bollinger Bands...",
             "Risk Manager is validating safety...",
             "Computing MT5 Lot Size and RRR..."
@@ -206,6 +207,29 @@ document.addEventListener('DOMContentLoaded', () => {
                     document.getElementById('heatmap-24h-weak').textContent = `${cs["24H"].weakest} (${cs["24H"].weakest_val}%)`;
                 }
                 document.getElementById('heatmap-panel').style.display = 'block';
+            }
+            
+            // Display Macro and News Status
+            if (data.news_status || data.macro) {
+                const macroPanel = document.getElementById('macro-panel');
+                const newsBadge = document.getElementById('news-status-badge');
+                
+                if (data.news_status) {
+                    document.getElementById('news-message').textContent = data.news_status.message;
+                    if (data.news_status.has_warning) {
+                        newsBadge.textContent = "WARNING";
+                        newsBadge.style.background = "var(--danger)";
+                    } else {
+                        newsBadge.textContent = "CLEAR";
+                        newsBadge.style.background = "var(--success)";
+                    }
+                }
+                
+                if (data.macro) {
+                    document.getElementById('macro-message').textContent = data.macro.replace("Central Bank Rates: ", "");
+                }
+                
+                macroPanel.style.display = 'block';
             }
 
             clearInterval(phraseInterval);
