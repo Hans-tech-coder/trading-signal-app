@@ -16,24 +16,87 @@
         </header>
 
         <main>
-            <div class="control-panel glass">
-                <div class="input-group">
-                    <label for="date-input">Analysis Date</label>
-                    <input type="date" id="date-input" value="2026-07-20">
+            <div class="dashboard-grid">
+                <!-- Left Column: Trading Console -->
+                <div class="grid-left">
+                    <div class="control-panel glass">
+                        <div class="panel-header">
+                            <h2>Trading Console</h2>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group">
+                                <label for="date-input">Analysis Date</label>
+                                <input type="date" id="date-input" value="2026-07-20">
+                            </div>
+                            <div class="input-group">
+                                <label for="balance-input">Account Balance ($)</label>
+                                <input type="number" id="balance-input" value="1000" placeholder="e.g. 1000">
+                            </div>
+                            <div class="input-group">
+                                <label for="risk-input">Risk (%)</label>
+                                <input type="number" id="risk-input" value="1" step="0.1" max="10" placeholder="e.g. 1.0">
+                            </div>
+                        </div>
+                        <button id="generate-btn" class="primary-btn scan-btn">Scan Market & Find Best Trade</button>
+
+                        <div class="status-panel hidden" id="loading-panel">
+                            <div class="spinner"></div>
+                            <p id="loading-text">Agents are gathering. This may take a minute...</p>
+                        </div>
+
+                        <div class="results-panel hidden" id="results-panel">
+                            <div class="signal-header">
+                                <div>
+                                    <h2 id="signal-pair" style="color: var(--accent); margin-bottom: 5px;">EUR/USD</h2>
+                                    <span style="color: var(--text-secondary); font-size: 0.9rem;">Recommended Trade</span>
+                                </div>
+                                <span class="badge" id="signal-action">BUY</span>
+                            </div>
+                            
+                            <div class="signal-grid">
+                                <div class="metric">
+                                    <span class="label">Entry</span>
+                                    <strong class="value" id="signal-entry">--</strong>
+                                </div>
+                                <div class="metric">
+                                    <span class="label">Take Profit</span>
+                                    <strong class="value text-success" id="signal-tp">--</strong>
+                                </div>
+                                <div class="metric">
+                                    <span class="label">Stop Loss</span>
+                                    <strong class="value text-danger" id="signal-sl">--</strong>
+                                </div>
+                            </div>
+                            
+                            <div class="signal-grid" style="margin-top: 1rem;">
+                                <div class="metric">
+                                    <span class="label">MT5 Lot Size</span>
+                                    <strong class="value" id="signal-lotsize" style="color: var(--accent);">--</strong>
+                                </div>
+                                <div class="metric">
+                                    <span class="label">Risk/Reward (RRR)</span>
+                                    <strong class="value" id="signal-rrr">--</strong>
+                                </div>
+                            </div>
+
+                            <div class="reasoning-box">
+                                <h3>AI Reasoning</h3>
+                                <p id="signal-reasoning">...</p>
+                            </div>
+                            
+                            <div class="execution-box" style="margin-top: 1.5rem; text-align: center; display: none;" id="execution-box">
+                                <button id="execute-mt5-btn" class="primary-btn" style="background: linear-gradient(135deg, #00b09b, #96c93d); width: 100%; font-size: 1.1rem; padding: 1rem; box-shadow: 0 4px 15px rgba(0, 176, 155, 0.3);">⚡ APPROVE & EXECUTE (MT5)</button>
+                                <p id="execution-status" style="margin-top: 10px; font-size: 0.9rem; color: var(--text-secondary);"></p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="input-group">
-                    <label for="balance-input">Account Balance ($)</label>
-                    <input type="number" id="balance-input" value="1000" placeholder="e.g. 1000">
-                </div>
-                <div class="input-group">
-                    <label for="risk-input">Risk Per Trade (%)</label>
-                    <input type="number" id="risk-input" value="1" step="0.1" max="10" placeholder="e.g. 1.0">
-                </div>
-                <button id="generate-btn" class="primary-btn">Scan Market & Find Best Trade</button>
-            </div>
+
+                <!-- Right Column: Context & Analytics -->
+                <div class="grid-right">
 
             <!-- Macro & News Status Panel -->
-            <div class="macro-panel glass" id="macro-panel" style="margin-bottom: 2rem; display: none; padding: 1.5rem; border-radius: 12px; background: rgba(255, 255, 255, 0.05); border-left: 4px solid var(--accent);">
+            <div class="macro-panel glass" id="macro-panel" style="margin-bottom: 1rem; display: none; padding: 1.5rem; border-radius: 12px; background: rgba(255, 255, 255, 0.05); border-left: 4px solid var(--accent);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                     <h2 style="color: var(--accent); margin: 0; font-size: 1.2rem;">Macro & News Status</h2>
                     <span id="news-status-badge" style="padding: 0.3rem 0.8rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; background: var(--success); color: white;">Clear</span>
@@ -45,8 +108,8 @@
             </div>
 
             <!-- Currency Strength Heatmap -->
-            <div class="heatmap-panel glass" id="heatmap-panel" style="margin-bottom: 2rem; display: none;">
-                <h2 style="color: var(--accent); margin-bottom: 1rem;">Live Currency Heatmap (28-Cross)</h2>
+            <div class="heatmap-panel glass" id="heatmap-panel" style="margin-bottom: 1rem; display: none;">
+                <h2 style="color: var(--accent); margin-bottom: 1rem; font-size: 1.2rem;">Live Currency Heatmap (28-Cross)</h2>
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
                     <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
                         <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Intraday Momentum (1H)</span>
@@ -75,10 +138,10 @@
                 </div>
             </div>
 
-            <div class="stats-panel glass" id="stats-panel" style="margin-bottom: 2rem;">
-                <div class="stats-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <h2 style="color: var(--accent); margin: 0;">Win Rate Analytics</h2>
-                    <button id="refresh-stats-btn" class="secondary-btn" style="padding: 0.5rem 1rem; border-radius: 6px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: white; cursor: pointer;">Refresh & Evaluate</button>
+            <div class="stats-panel glass" id="stats-panel" style="margin-bottom: 1rem;">
+                <div class="stats-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                    <h2 style="color: var(--accent); margin: 0; font-size: 1.2rem;">Win Rate Analytics</h2>
+                    <button id="refresh-stats-btn" class="secondary-btn" style="padding: 0.4rem 0.8rem; border-radius: 6px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: white; cursor: pointer; font-size: 0.85rem;">Refresh & Evaluate</button>
                 </div>
                 <div class="stats-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; text-align: center;">
                     <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
@@ -106,78 +169,32 @@
                 </div>
             </div>
 
-            <div class="analytics-panel glass" id="advanced-analytics-panel" style="margin-bottom: 2rem;">
-                <div class="stats-header" style="margin-bottom: 1rem;">
-                    <h2 style="color: var(--accent); margin: 0;">Advanced Analytics</h2>
-                    <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">Win Rate by Asset</p>
+            <div class="analytics-panel glass" id="advanced-analytics-panel" style="margin-bottom: 1rem;">
+                <div class="stats-header" style="margin-bottom: 0.5rem;">
+                    <h2 style="color: var(--accent); margin: 0; font-size: 1.2rem;">Advanced Analytics</h2>
+                    <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 2px;">Win Rate by Asset</p>
                 </div>
-                <div class="chart-container" style="position: relative; height:200px; width:100%">
+                <div class="chart-container" style="position: relative; height:160px; width:100%">
                     <canvas id="winRateChart"></canvas>
                 </div>
             </div>
 
-            <div class="status-panel glass hidden" id="loading-panel">
-                <div class="spinner"></div>
-                <p id="loading-text">Agents are gathering. This may take a minute...</p>
-            </div>
 
-            <div class="results-panel glass hidden" id="results-panel">
-                <div class="signal-header">
-                    <div>
-                        <h2 id="signal-pair" style="color: var(--accent); margin-bottom: 5px;">EUR/USD</h2>
-                        <span style="color: var(--text-secondary); font-size: 0.9rem;">Recommended Trade</span>
-                    </div>
-                    <span class="badge" id="signal-action">BUY</span>
-                </div>
-                
-                <div class="signal-grid">
-                    <div class="metric">
-                        <span class="label">Entry</span>
-                        <strong class="value" id="signal-entry">--</strong>
-                    </div>
-                    <div class="metric">
-                        <span class="label">Take Profit</span>
-                        <strong class="value text-success" id="signal-tp">--</strong>
-                    </div>
-                    <div class="metric">
-                        <span class="label">Stop Loss</span>
-                        <strong class="value text-danger" id="signal-sl">--</strong>
-                    </div>
-                </div>
-                
-                <div class="signal-grid" style="margin-top: 1rem;">
-                    <div class="metric">
-                        <span class="label">MT5 Lot Size</span>
-                        <strong class="value" id="signal-lotsize" style="color: var(--accent);">--</strong>
-                    </div>
-                    <div class="metric">
-                        <span class="label">Risk/Reward (RRR)</span>
-                        <strong class="value" id="signal-rrr">--</strong>
-                    </div>
-                </div>
 
-                <div class="reasoning-box">
-                    <h3>AI Reasoning</h3>
-                    <p id="signal-reasoning">...</p>
-                </div>
-                
-                <div class="execution-box" style="margin-top: 1.5rem; text-align: center; display: none;" id="execution-box">
-                    <button id="execute-mt5-btn" class="primary-btn" style="background: linear-gradient(135deg, #00b09b, #96c93d); width: 100%; font-size: 1.1rem; padding: 1rem; box-shadow: 0 4px 15px rgba(0, 176, 155, 0.3);">⚡ APPROVE & EXECUTE (MT5)</button>
-                    <p id="execution-status" style="margin-top: 10px; font-size: 0.9rem; color: var(--text-secondary);"></p>
-                </div>
-            </div>
-
-            <div class="mentor-panel glass" id="mentor-panel" style="margin-top: 2rem;">
+            <div class="mentor-panel glass" id="mentor-panel" style="margin-top: 1rem;">
                 <div class="stats-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                     <div>
-                        <h2 style="color: #a855f7; margin: 0;">🧠 AI Trading Mentor</h2>
-                        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">Analyze your past patterns</p>
+                        <h2 style="color: #a855f7; margin: 0; font-size: 1.25rem;">🧠 AI Trading Mentor</h2>
+                        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 2px;">Analyze your past patterns</p>
                     </div>
-                    <button id="ask-mentor-btn" class="primary-btn" style="background: linear-gradient(135deg, #a855f7, #6366f1);">Ask Mentor AI</button>
+                    <button id="ask-mentor-btn" class="primary-btn" style="background: linear-gradient(135deg, #a855f7, #6366f1); padding: 0.5rem 1rem; width: auto; font-size: 0.85rem;">Ask Mentor AI</button>
                 </div>
-                <div class="mentor-feedback" id="mentor-feedback-box" style="display: none; background: rgba(168, 85, 247, 0.05); padding: 1.5rem; border-radius: 8px; border: 1px solid rgba(168, 85, 247, 0.2); font-size: 0.95rem; line-height: 1.6;">
-                    <p id="mentor-text" style="white-space: pre-wrap;">Analyzing your trades...</p>
+                <div class="mentor-feedback" id="mentor-feedback-box" style="display: none; background: rgba(168, 85, 247, 0.05); padding: 1rem; border-radius: 8px; border: 1px solid rgba(168, 85, 247, 0.2); font-size: 0.9rem; line-height: 1.5;">
+                    <p id="mentor-text" style="white-space: pre-wrap; margin: 0; color: var(--text-primary);">Analyzing your trades...</p>
                 </div>
+            </div>
+            </div>
+            <!-- End Grid Right -->
             </div>
         </main>
     </div>
