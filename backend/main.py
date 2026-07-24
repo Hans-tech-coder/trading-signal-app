@@ -19,6 +19,7 @@ import json
 import database
 import sentiment
 import news_engine
+import mt5_engine
 
 # Setup Gemini Client
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -41,6 +42,13 @@ class ScanRequest(BaseModel):
     date: str
     account_balance: float = 1000.0
     risk_percentage: float = 1.0
+
+class ExecuteTradeRequest(BaseModel):
+    action: str
+    symbol: str
+    entry: str
+    sl: str
+    tp: str
 
 MAJOR_PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "XAUUSD=X"]
 
@@ -406,7 +414,17 @@ Output your response STRICTLY as a JSON object with the following schema:
         
         # 4. Parse Response
         try:
-            ai_data = json.loads(response.text)
+            # Clean up the response text in case Gemini adds extra characters
+            raw_text = response.text.strip()
+            start_idx = raw_text.find('{')
+            end_idx = raw_text.rfind('}')
+            
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                clean_json_str = raw_text[start_idx:end_idx+1]
+                ai_data = json.loads(clean_json_str)
+            else:
+                ai_data = json.loads(raw_text)
+                
             action = ai_data.get("action", "HOLD").upper()
             
             if action == "HOLD":
@@ -596,3 +614,15 @@ Trade History:
         print(f"AI Mentor Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate AI mentor feedback.")
 
+@app.post("/api/execute-trade")
+def execute_trade_endpoint(req: ExecuteTradeRequest):
+    try:
+        print(f"Executing MT5 Trade: {req.action} {req.symbol} @ {req.entry} | SL: {req.sl} | TP: {req.tp}")
+        result = mt5_engine.execute_trade(req.action, req.symbol, req.sl, req.tp)
+        if result["success"]:
+            return {"status": "success", "message": result["message"], "data": result}
+        else:
+            return {"status": "error", "message": result["message"]}
+    except Exception as e:
+        print(f"Execute Trade Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

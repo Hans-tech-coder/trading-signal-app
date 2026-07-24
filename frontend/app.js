@@ -185,8 +185,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (data.action === "HOLD") {
                 document.getElementById('signal-reasoning').innerHTML = "<b>🚨 NO TRADE TODAY:</b> " + data.reasoning.replace(/\n/g, '<br>');
+                document.getElementById('execution-box').style.display = 'none';
             } else {
                 document.getElementById('signal-reasoning').innerHTML = data.reasoning.replace(/\n/g, '<br>');
+                document.getElementById('execution-box').style.display = 'block';
+                document.getElementById('execution-status').textContent = '';
+                document.getElementById('execute-mt5-btn').disabled = false;
+                
+                // Store signal data globally for execution
+                window.currentSignal = {
+                    action: data.action,
+                    symbol: data.ticker,
+                    entry: data.entry,
+                    sl: data.sl,
+                    tp: data.tp
+                };
             }
 
             updateBadge(data.action);
@@ -273,6 +286,41 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             askMentorBtn.disabled = false;
             askMentorBtn.textContent = 'Ask Mentor AI';
+        }
+    });
+
+    // MT5 Execution Logic
+    const executeBtn = document.getElementById('execute-mt5-btn');
+    const executeStatus = document.getElementById('execution-status');
+    
+    executeBtn.addEventListener('click', async () => {
+        if (!window.currentSignal) return;
+        
+        executeBtn.disabled = true;
+        executeStatus.style.color = 'var(--text-secondary)';
+        executeStatus.textContent = 'Sending order to MT5...';
+        
+        try {
+            const response = await fetch('http://127.0.0.1:8000/api/execute-trade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(window.currentSignal)
+            });
+            
+            const data = await response.json();
+            
+            if (data.status === "success") {
+                executeStatus.style.color = 'var(--success)';
+                executeStatus.innerHTML = `✅ <b>Success!</b> ${data.message}`;
+            } else {
+                executeStatus.style.color = 'var(--danger)';
+                executeStatus.innerHTML = `❌ <b>Failed:</b> ${data.message}`;
+                executeBtn.disabled = false;
+            }
+        } catch (error) {
+            executeStatus.style.color = 'var(--danger)';
+            executeStatus.textContent = '❌ Failed to communicate with backend.';
+            executeBtn.disabled = false;
         }
     });
 

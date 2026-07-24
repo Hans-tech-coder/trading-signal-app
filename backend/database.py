@@ -108,5 +108,59 @@ def get_trade_stats():
         "recent_trades": recent_trades
     }
 
+def get_advanced_analytics():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Win rate by Asset
+    cursor.execute('''
+        SELECT ticker, 
+               COUNT(*) as total_trades,
+               SUM(CASE WHEN status = "WON" THEN 1 ELSE 0 END) as won_trades
+        FROM signals 
+        WHERE status IN ("WON", "LOST")
+        GROUP BY ticker
+    ''')
+    asset_stats = cursor.fetchall()
+    
+    asset_performance = {}
+    for row in asset_stats:
+        ticker = row[0]
+        total = row[1]
+        won = row[2]
+        win_rate = (won / total * 100) if total > 0 else 0
+        asset_performance[ticker] = {
+            "total_trades": total,
+            "win_rate": round(win_rate, 1)
+        }
+        
+    conn.close()
+    return {
+        "asset_performance": asset_performance
+    }
+
+def get_all_trades_for_mentor():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Get the last 50 completed trades
+    cursor.execute('SELECT date_generated, ticker, action, entry_price, take_profit, stop_loss, status, lot_size, rrr FROM signals WHERE status IN ("WON", "LOST") ORDER BY id DESC LIMIT 50')
+    trades = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for t in trades:
+        result.append({
+            "date": t[0],
+            "ticker": t[1],
+            "action": t[2],
+            "entry": t[3],
+            "tp": t[4],
+            "sl": t[5],
+            "status": t[6],
+            "lot_size": t[7],
+            "rrr": t[8]
+        })
+    return result
+
 # Initialize DB when this module is imported
 init_db()
