@@ -28,10 +28,7 @@
                                 <label for="date-input">Analysis Date</label>
                                 <input type="date" id="date-input" value="2026-07-20">
                             </div>
-                            <div class="input-group">
-                                <label for="balance-input">Account Balance ($)</label>
-                                <input type="number" id="balance-input" value="1000" placeholder="e.g. 1000">
-                            </div>
+
                             <div class="input-group">
                                 <label for="risk-input">Risk (%)</label>
                                 <input type="number" id="risk-input" value="1" step="0.1" max="10" placeholder="e.g. 1.0">
@@ -112,28 +109,67 @@
                 <h2 style="color: var(--accent); margin-bottom: 1rem; font-size: 1.2rem;">Live Currency Heatmap (28-Cross)</h2>
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
                     <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
-                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Intraday Momentum (1H)</span>
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <strong style="color: var(--success);" id="heatmap-1h-strong">--</strong>
-                            <span style="color: #666;">vs</span>
-                            <strong style="color: var(--danger);" id="heatmap-1h-weak">--</strong>
+                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.8rem; text-align: center;">Intraday Momentum (1H)</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 0.5rem;">
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 0.2rem;">
+                                <strong style="color: var(--success); font-size: 1.1rem; line-height: 1;" id="heatmap-1h-strong-pair">--</strong>
+                                <span style="color: var(--success); font-size: 0.8rem;" id="heatmap-1h-strong-val">--</span>
+                            </div>
+                            <span style="color: rgba(255,255,255,0.2); font-size: 0.75rem; font-weight: 600; letter-spacing: 1px;">VS</span>
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 0.2rem;">
+                                <strong style="color: var(--danger); font-size: 1.1rem; line-height: 1;" id="heatmap-1h-weak-pair">--</strong>
+                                <span style="color: var(--danger); font-size: 0.8rem;" id="heatmap-1h-weak-val">--</span>
+                            </div>
                         </div>
                     </div>
                     <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
-                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Short-Term Trend (4H)</span>
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <strong style="color: var(--success);" id="heatmap-4h-strong">--</strong>
-                            <span style="color: #666;">vs</span>
-                            <strong style="color: var(--danger);" id="heatmap-4h-weak">--</strong>
+                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.8rem; text-align: center;">Short-Term Trend (4H)</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 0.5rem;">
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 0.2rem;">
+                                <strong style="color: var(--success); font-size: 1.1rem; line-height: 1;" id="heatmap-4h-strong-pair">--</strong>
+                                <span style="color: var(--success); font-size: 0.8rem;" id="heatmap-4h-strong-val">--</span>
+                            </div>
+                            <span style="color: rgba(255,255,255,0.2); font-size: 0.75rem; font-weight: 600; letter-spacing: 1px;">VS</span>
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 0.2rem;">
+                                <strong style="color: var(--danger); font-size: 1.1rem; line-height: 1;" id="heatmap-4h-weak-pair">--</strong>
+                                <span style="color: var(--danger); font-size: 0.8rem;" id="heatmap-4h-weak-val">--</span>
+                            </div>
                         </div>
                     </div>
                     <div style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
-                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Daily Flow (24H)</span>
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <strong style="color: var(--success);" id="heatmap-24h-strong">--</strong>
-                            <span style="color: #666;">vs</span>
-                            <strong style="color: var(--danger);" id="heatmap-24h-weak">--</strong>
+                        <span style="display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.8rem; text-align: center;">Daily Flow (24H)</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 0.5rem;">
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 0.2rem;">
+                                <strong style="color: var(--success); font-size: 1.1rem; line-height: 1;" id="heatmap-24h-strong-pair">--</strong>
+                                <span style="color: var(--success); font-size: 0.8rem;" id="heatmap-24h-strong-val">--</span>
+                            </div>
+                            <span style="color: rgba(255,255,255,0.2); font-size: 0.75rem; font-weight: 600; letter-spacing: 1px;">VS</span>
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 0.2rem;">
+                                <strong style="color: var(--danger); font-size: 1.1rem; line-height: 1;" id="heatmap-24h-weak-pair">--</strong>
+                                <span style="color: var(--danger); font-size: 0.8rem;" id="heatmap-24h-weak-val">--</span>
+                            </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats-panel glass" id="mt5-analytics-panel" style="margin-bottom: 1rem; border-left: 4px solid #a855f7;">
+                <div class="stats-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                    <h2 style="color: #a855f7; margin: 0; font-size: 1.2rem;">MT5 Live Analytics</h2>
+                    <button id="refresh-mt5-btn" class="secondary-btn" style="padding: 0.4rem 0.8rem; border-radius: 6px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: white; cursor: pointer; font-size: 0.85rem;">Refresh</button>
+                </div>
+                <div class="stats-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; text-align: center;">
+                    <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span class="label" style="display: block; font-size: 0.8rem; color: var(--text-secondary);">Balance</span>
+                        <strong class="value" id="mt5-balance" style="font-size: 1.5rem; color: #fff;">$--</strong>
+                    </div>
+                    <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span class="label" style="display: block; font-size: 0.8rem; color: var(--text-secondary);">Max Drawdown</span>
+                        <strong class="value text-danger" id="mt5-drawdown" style="font-size: 1.5rem; color: var(--danger);">$--</strong>
+                    </div>
+                    <div class="stat-box" style="background: rgba(255,255,255,0.02); padding: 1rem; border-radius: 8px;">
+                        <span class="label" style="display: block; font-size: 0.8rem; color: var(--text-secondary);">Recovery Factor</span>
+                        <strong class="value" id="mt5-recovery" style="font-size: 1.5rem; color: var(--success);">--</strong>
                     </div>
                 </div>
             </div>

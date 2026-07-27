@@ -130,9 +130,41 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshStatsBtn.disabled = false;
     });
 
+    const loadMt5Analytics = async () => {
+        try {
+            const response = await fetch('http://127.0.0.1:8000/api/mt5-analytics');
+            const data = await response.json();
+            
+            if (data.success) {
+                document.getElementById('mt5-balance').textContent = `$${data.balance}`;
+                document.getElementById('mt5-drawdown').textContent = `$${data.max_drawdown}`;
+                document.getElementById('mt5-recovery').textContent = data.recovery_factor;
+            } else {
+                console.error("Failed to load MT5 Analytics:", data.message);
+            }
+        } catch (error) {
+            console.error("Error loading MT5 Analytics:", error);
+        }
+    };
+
+    const refreshMt5Btn = document.getElementById('refresh-mt5-btn');
+    if (refreshMt5Btn) {
+        refreshMt5Btn.addEventListener('click', async () => {
+            refreshMt5Btn.textContent = 'Refreshing...';
+            refreshMt5Btn.disabled = true;
+            await loadMt5Analytics();
+            refreshMt5Btn.textContent = 'Refresh';
+            refreshMt5Btn.disabled = false;
+        });
+    }
+
+    // Load MT5 Analytics on startup
+    loadMt5Analytics();
+
     generateBtn.addEventListener('click', async () => {
         const date = document.getElementById('date-input').value;
-        const balance = parseFloat(document.getElementById('balance-input').value) || 1000;
+        const mt5BalanceText = document.getElementById('mt5-balance').textContent.replace('$', '');
+        const balance = parseFloat(mt5BalanceText) || 1000;
         const risk = parseFloat(document.getElementById('risk-input').value) || 1.0;
 
         resultsPanel.classList.add('hidden');
@@ -208,16 +240,22 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.currency_strength && Object.keys(data.currency_strength).length > 0) {
                 const cs = data.currency_strength;
                 if (cs["1H"] && cs["1H"].strongest) {
-                    document.getElementById('heatmap-1h-strong').textContent = `${cs["1H"].strongest} (+${cs["1H"].strongest_val}%)`;
-                    document.getElementById('heatmap-1h-weak').textContent = `${cs["1H"].weakest} (${cs["1H"].weakest_val}%)`;
+                    document.getElementById('heatmap-1h-strong-pair').textContent = cs["1H"].strongest;
+                    document.getElementById('heatmap-1h-strong-val').textContent = `+${cs["1H"].strongest_val}%`;
+                    document.getElementById('heatmap-1h-weak-pair').textContent = cs["1H"].weakest;
+                    document.getElementById('heatmap-1h-weak-val').textContent = `${cs["1H"].weakest_val}%`;
                 }
                 if (cs["4H"] && cs["4H"].strongest) {
-                    document.getElementById('heatmap-4h-strong').textContent = `${cs["4H"].strongest} (+${cs["4H"].strongest_val}%)`;
-                    document.getElementById('heatmap-4h-weak').textContent = `${cs["4H"].weakest} (${cs["4H"].weakest_val}%)`;
+                    document.getElementById('heatmap-4h-strong-pair').textContent = cs["4H"].strongest;
+                    document.getElementById('heatmap-4h-strong-val').textContent = `+${cs["4H"].strongest_val}%`;
+                    document.getElementById('heatmap-4h-weak-pair').textContent = cs["4H"].weakest;
+                    document.getElementById('heatmap-4h-weak-val').textContent = `${cs["4H"].weakest_val}%`;
                 }
                 if (cs["24H"] && cs["24H"].strongest) {
-                    document.getElementById('heatmap-24h-strong').textContent = `${cs["24H"].strongest} (+${cs["24H"].strongest_val}%)`;
-                    document.getElementById('heatmap-24h-weak').textContent = `${cs["24H"].weakest} (${cs["24H"].weakest_val}%)`;
+                    document.getElementById('heatmap-24h-strong-pair').textContent = cs["24H"].strongest;
+                    document.getElementById('heatmap-24h-strong-val').textContent = `+${cs["24H"].strongest_val}%`;
+                    document.getElementById('heatmap-24h-weak-pair').textContent = cs["24H"].weakest;
+                    document.getElementById('heatmap-24h-weak-val').textContent = `${cs["24H"].weakest_val}%`;
                 }
                 document.getElementById('heatmap-panel').style.display = 'block';
             }

@@ -16,6 +16,8 @@ from google import genai
 from google.genai import types
 import subprocess
 import json
+import threading
+import time
 import database
 import sentiment
 import news_engine
@@ -37,6 +39,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def trailing_stop_loop():
+    while True:
+        try:
+            mt5_engine.apply_smart_trailing_stop(atr_multiplier=1.5)
+        except Exception as e:
+            print(f"Trailing stop loop error: {e}")
+        time.sleep(60)
+
+@app.on_event("startup")
+def start_background_tasks():
+    thread = threading.Thread(target=trailing_stop_loop, daemon=True)
+    thread.start()
+
 
 class ScanRequest(BaseModel):
     date: str
@@ -416,14 +432,63 @@ Output your response STRICTLY as a JSON object with the following schema:
         try:
             # Clean up the response text in case Gemini adds extra characters
             raw_text = response.text.strip()
-            start_idx = raw_text.find('{')
-            end_idx = raw_text.rfind('}')
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            elif raw_text.startswith("```"):
+                raw_text = raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            raw_text = raw_text.strip()
             
-            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                clean_json_str = raw_text[start_idx:end_idx+1]
-                ai_data = json.loads(clean_json_str)
-            else:
-                ai_data = json.loads(raw_text)
+            parsed = False
+            ai_data = None
+            temp_text = raw_text
+            
+            # Keep trying to load; if it fails, strip the last char if it's an extra closing bracket
+            while len(temp_text) > 0 and not parsed:
+                try:
+                    ai_data = json.loads(temp_text)
+                    parsed = True
+                except json.JSONDecodeError:
+                    if temp_text.endswith('}'):
+                        temp_text = temp_text[:-1].strip()
+                    elif temp_text.endswith(']'):
+                        temp_text = temp_text[:-1].strip()
+                    else:
+                        break
+            
+            if not parsed:
+                # Fallback to basic extraction
+                start_idx = raw_text.find('{')
+                end_idx = raw_text.rfind('}')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    clean_json_str = raw_text[start_idx:end_idx+1]
+                    try:
+                        ai_data = json.loads(clean_json_str)
+                    except json.JSONDecodeError:
+                        # Final fallback: use regex to extract fields
+                        import re
+                        action_match = re.search(r'"action"\s*:\s*"([^"]+)"', raw_text)
+                        entry_match = re.search(r'"entry"\s*:\s*"([^"]*)"', raw_text)
+                        tp_match = re.search(r'"tp"\s*:\s*"([^"]*)"', raw_text)
+                        sl_match = re.search(r'"sl"\s*:\s*"([^"]*)"', raw_text)
+                        reasoning_match = re.search(r'"reasoning"\s*:\s*"((?:[^"]|\\")*)"', raw_text)
+                        
+                        if action_match:
+                            ai_data = {
+                                "action": action_match.group(1),
+                                "entry": entry_match.group(1) if entry_match else "",
+                                "tp": tp_match.group(1) if tp_match else "",
+                                "sl": sl_match.group(1) if sl_match else "",
+                                "reasoning": reasoning_match.group(1).replace('\\"', '"') if reasoning_match else "No reasoning provided."
+                            }
+                        else:
+                            raise Exception(f"Could not parse JSON from response: {raw_text}")
+                else:
+                    raise Exception("Could not parse JSON from response")
+                    
+            if isinstance(ai_data, list) and len(ai_data) > 0:
+                ai_data = ai_data[0]
                 
             action = ai_data.get("action", "HOLD").upper()
             
@@ -568,6 +633,14 @@ def trade_stats():
     try:
         stats = database.get_trade_stats()
         return {"status": "success", "data": stats}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mt5-analytics")
+def mt5_analytics():
+    try:
+        data = mt5_engine.get_account_analytics()
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

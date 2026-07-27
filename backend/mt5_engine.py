@@ -1,5 +1,7 @@
 import MetaTrader5 as mt5
 import math
+import threading
+from datetime import datetime, timedelta
 
 def initialize_mt5():
     if not mt5.initialize():
@@ -53,7 +55,7 @@ def calculate_lot_size(symbol, entry_price, sl_price, risk_percentage=0.01):
         
     return round(lot_size, 2)
 
-def execute_trade(action, raw_symbol, sl, tp, deviation=10):
+def _execute_trade_sync(action, raw_symbol, sl, tp, deviation=10):
     if not initialize_mt5():
         return {"success": False, "message": "Failed to connect to MT5 Desktop App. Is it running?"}
         
@@ -123,3 +125,154 @@ def execute_trade(action, raw_symbol, sl, tp, deviation=10):
         "volume": result.volume,
         "price": result.price
     }
+
+def execute_trade(action, raw_symbol, sl, tp, deviation=10, timeout_sec=5.0):
+    """
+    Wrapper function to execute trades with Timeout Protection.
+    Runs the MT5 order execution in a daemon thread so it doesn't freeze the FastAPI server.
+    """
+    result_container = {"success": False, "message": "Operation timed out."}
+    
+    def target():
+        try:
+            res = _execute_trade_sync(action, raw_symbol, sl, tp, deviation)
+            # Update container with the result from the sync function
+            for key, value in res.items():
+                result_container[key] = value
+        except Exception as e:
+            result_container["success"] = False
+            result_container["message"] = f"Execution Thread Error: {str(e)}"
+            
+    thread = threading.Thread(target=target)
+    thread.daemon = True
+    thread.start()
+    
+    # Wait for the thread to complete, up to timeout_sec
+    thread.join(timeout_sec)
+    
+    if thread.is_alive():
+        # The thread is still running, which means MT5 is hung.
+        try:
+            mt5.shutdown() # Attempt to gracefully close the connection
+        except:
+            pass
+        return {"success": False, "message": f"MT5 Execution timed out after {timeout_sec}s. The terminal might be unresponsive."}
+        
+    return result_container
+
+def get_account_analytics():
+    if not initialize_mt5():
+        return {"success": False, "message": "Failed to connect to MT5 Desktop App."}
+        
+    account_info = mt5.account_info()
+    if account_info is None:
+        mt5.shutdown()
+        return {"success": False, "message": "Failed to get account info"}
+        
+    balance = account_info.balance
+    
+    # Get history deals
+    # Use a large time frame, e.g., 30 days
+    date_from = datetime.now() - timedelta(days=30)
+    date_to = datetime.now() + timedelta(days=1)
+    
+    deals = mt5.history_deals_get(date_from, date_to)
+    if deals is None:
+        mt5.shutdown()
+        return {"success": False, "message": "Failed to get history deals"}
+        
+    running_profit = 0.0
+    peak_profit = 0.0
+    max_drawdown = 0.0
+    
+    for deal in deals:
+        if deal.profit != 0:
+            running_profit += deal.profit
+            if running_profit > peak_profit:
+                peak_profit = running_profit
+                
+            drawdown = peak_profit - running_profit
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+                
+    net_profit = running_profit
+    
+    recovery_factor = 0.0
+    if max_drawdown > 0:
+        recovery_factor = net_profit / max_drawdown
+        
+    mt5.shutdown()
+    
+    return {
+        "success": True,
+        "balance": balance,
+        "net_profit": round(net_profit, 2),
+        "max_drawdown": round(max_drawdown, 2),
+        "recovery_factor": round(recovery_factor, 2)
+    }
+
+def apply_smart_trailing_stop(atr_multiplier=1.5):
+    if not initialize_mt5():
+        return {"success": False, "message": "Failed to connect to MT5 Desktop App."}
+        
+    positions = mt5.positions_get()
+    if positions is None:
+        mt5.shutdown()
+        return {"success": False, "message": "Failed to get positions"}
+        
+    modifications = 0
+    for pos in positions:
+        symbol = pos.symbol
+        ticket = pos.ticket
+        pos_type = pos.type
+        current_sl = pos.sl
+        current_price = pos.price_current
+        open_price = pos.price_open
+        
+        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 14)
+        if rates is None or len(rates) < 14:
+            continue
+            
+        # Calculate ATR
+        tr_list = []
+        for i in range(1, len(rates)):
+            high = rates[i]['high']
+            low = rates[i]['low']
+            prev_close = rates[i-1]['close']
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            tr_list.append(tr)
+            
+        atr = sum(tr_list) / len(tr_list)
+        trail_distance = atr * atr_multiplier
+        
+        new_sl = current_sl
+        modified = False
+        
+        if pos_type == mt5.ORDER_TYPE_BUY:
+            proposed_sl = current_price - trail_distance
+            if current_price > open_price and proposed_sl > current_sl:
+                new_sl = proposed_sl
+                modified = True
+        elif pos_type == mt5.ORDER_TYPE_SELL:
+            proposed_sl = current_price + trail_distance
+            if current_price < open_price and (current_sl == 0 or proposed_sl < current_sl):
+                new_sl = proposed_sl
+                modified = True
+                
+        if modified:
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info:
+                 new_sl = round(new_sl, symbol_info.digits)
+                 request = {
+                     "action": mt5.TRADE_ACTION_SLTP,
+                     "symbol": symbol,
+                     "position": ticket,
+                     "sl": float(new_sl),
+                     "tp": float(pos.tp)
+                 }
+                 result = mt5.order_send(request)
+                 if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                     modifications += 1
+
+    mt5.shutdown()
+    return {"success": True, "modifications": modifications}
