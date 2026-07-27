@@ -7,6 +7,7 @@ import re
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
+import pytz
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -366,8 +367,6 @@ async def scan_and_signal(req: ScanRequest):
 
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
-        current_time_str = datetime.now().strftime("%I:%M %p (Local Time)")
-        
         prompt = f"""
 You are an expert forex and commodities trader. 
 I am providing you with a screenshot of the current {tf_label} chart for {tv_symbol} directly from TradingView.
@@ -381,7 +380,6 @@ Currency Strength Overview (Multi-Timeframe): {cs_overview}.
 {sentiment_str}.
 
 NEWS STATUS: {news_check['message']}
-CURRENT LOCAL TIME: {current_time_str}
 
 Analyze the visual chart, paying close attention to:
 - Candlestick patterns
@@ -396,8 +394,9 @@ CRITICAL CONTRARIAN RULE: Use the Retail Sentiment data as a contrarian filter t
 
 CRITICAL TREND RULE: Do NOT attempt to "catch falling knives" or "stand in front of a freight train". If the price action is in a strong, established downtrend (consistently trading below the VWAP and Middle Bollinger Band), you MUST look for SELL setups or HOLD. Do not issue a BUY signal against a strong downtrend. Conversely, do not SELL into a strong uptrend.
 
-CRITICAL NEWS RULE: If the NEWS STATUS above contains a "HIGH IMPACT NEWS WARNING", compare the news time to the CURRENT LOCAL TIME. If the news event has ALREADY PASSED today, the whipsaw risk has subsided, and you may proceed with generating a BUY or SELL signal based on technicals. However, if the high-impact news is still UPCOMING later today, you MUST return "HOLD" to avoid whipsaws.
-
+CRITICAL NEWS RULE (ABSOLUTE OVERRIDE): Look at the NEWS STATUS above. Each high-impact news event is tagged with either [PASSED] or [UPCOMING].
+1. If ANY high-impact news event is tagged as [UPCOMING], this is a strict "No-Trade Zone". You MUST ABSOLUTELY return "HOLD" regardless of how perfect the chart or trend looks. Whipsaw risk overrides all technical setups.
+2. If ALL high-impact news events for today are tagged as [PASSED], the whipsaw risk has subsided, and you may proceed with generating a BUY or SELL signal based on technicals.
 CRITICAL RISK RULE: You MUST ensure that the Risk-to-Reward Ratio (RRR) of your selected TP and SL is at least 1:2. If a 1:2 ratio is not possible given the market structure, you MUST return "HOLD".
 
 Output your response STRICTLY as a JSON object with the following schema:
@@ -421,6 +420,7 @@ Output your response STRICTLY as a JSON object with the following schema:
             ],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                temperature=0.1,
             )
         )
         print("[4/4] Received analysis from AI.")
@@ -465,27 +465,33 @@ Output your response STRICTLY as a JSON object with the following schema:
                     clean_json_str = raw_text[start_idx:end_idx+1]
                     try:
                         ai_data = json.loads(clean_json_str)
+                        parsed = True
                     except json.JSONDecodeError:
-                        # Final fallback: use regex to extract fields
-                        import re
-                        action_match = re.search(r'"action"\s*:\s*"([^"]+)"', raw_text)
-                        entry_match = re.search(r'"entry"\s*:\s*"([^"]*)"', raw_text)
-                        tp_match = re.search(r'"tp"\s*:\s*"([^"]*)"', raw_text)
-                        sl_match = re.search(r'"sl"\s*:\s*"([^"]*)"', raw_text)
-                        reasoning_match = re.search(r'"reasoning"\s*:\s*"((?:[^"]|\\")*)"', raw_text)
-                        
-                        if action_match:
-                            ai_data = {
-                                "action": action_match.group(1),
-                                "entry": entry_match.group(1) if entry_match else "",
-                                "tp": tp_match.group(1) if tp_match else "",
-                                "sl": sl_match.group(1) if sl_match else "",
-                                "reasoning": reasoning_match.group(1).replace('\\"', '"') if reasoning_match else "No reasoning provided."
-                            }
-                        else:
-                            raise Exception(f"Could not parse JSON from response: {raw_text}")
+                        pass
+                
+            if not parsed:
+                # Final fallback: use regex to extract fields
+                import re
+                action_match = re.search(r'"action"\s*:\s*"([^"]+)"', raw_text)
+                entry_match = re.search(r'"entry"\s*:\s*"([^"]*)"', raw_text)
+                tp_match = re.search(r'"tp"\s*:\s*"([^"]*)"', raw_text)
+                sl_match = re.search(r'"sl"\s*:\s*"([^"]*)"', raw_text)
+                
+                # Use a more robust regex to capture reasoning even if closing quotes are missing
+                reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]*)', raw_text)
+                if not reasoning_match:
+                    reasoning_match = re.search(r'"reasoning"\s*:\s*"(.*)', raw_text, re.DOTALL)
+                
+                if action_match:
+                    ai_data = {
+                        "action": action_match.group(1),
+                        "entry": entry_match.group(1) if entry_match else "",
+                        "tp": tp_match.group(1) if tp_match else "",
+                        "sl": sl_match.group(1) if sl_match else "",
+                        "reasoning": reasoning_match.group(1).strip() if reasoning_match else "No reasoning provided."
+                    }
                 else:
-                    raise Exception("Could not parse JSON from response")
+                    raise Exception(f"Could not parse JSON from response: {raw_text}")
                     
             if isinstance(ai_data, list) and len(ai_data) > 0:
                 ai_data = ai_data[0]
