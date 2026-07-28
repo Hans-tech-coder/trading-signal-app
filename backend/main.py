@@ -458,6 +458,37 @@ async def scan_and_signal(req: ScanRequest):
             print(f"      Error calculating Support/Resistance: {e}")
             lookback_str = "Unknown"
 
+        # --- PYTHON MATH GUARDRAIL ---
+        # LLMs are bad at math. We pre-calculate if a 1:2 RRR is even possible
+        # based on safe SL (VWAP) and TP bounds (Macro S/R).
+        math_guardrail = ""
+        try:
+            cp_f = float(current_price)
+            vwap_f = float(vwap)
+            supp_f = float(support_level)
+            res_f = float(resistance_level)
+            
+            if "Downtrend" in trend_status and cp_f < vwap_f:
+                risk = vwap_f - cp_f
+                req_reward = risk * 2
+                req_tp = cp_f - req_reward
+                dist_to_support = cp_f - supp_f
+                if req_tp < supp_f:
+                    math_guardrail = f"\nMATHEMATICAL GUARDRAIL: A SELL trade requires SL above VWAP ({vwap_f}), meaning Risk is {risk:.2f}. For a 1:2 RRR, TP must be at {req_tp:.2f}. However, Macro Support is at {supp_f:.2f} (only {dist_to_support:.2f} away). A 1:2 RRR is MATHEMATICALLY IMPOSSIBLE without breaking support. You MUST return HOLD."
+                else:
+                    math_guardrail = f"\nMATHEMATICAL GUARDRAIL: A SELL trade with SL above VWAP ({vwap_f}) requires TP at {req_tp:.2f}. This is ABOVE Macro Support ({supp_f:.2f}), so a 1:2 RRR IS mathematically possible."
+            elif "Uptrend" in trend_status and cp_f > vwap_f:
+                risk = cp_f - vwap_f
+                req_reward = risk * 2
+                req_tp = cp_f + req_reward
+                dist_to_res = res_f - cp_f
+                if req_tp > res_f:
+                    math_guardrail = f"\nMATHEMATICAL GUARDRAIL: A BUY trade requires SL below VWAP ({vwap_f}), meaning Risk is {risk:.2f}. For a 1:2 RRR, TP must be at {req_tp:.2f}. However, Macro Resistance is at {res_f:.2f} (only {dist_to_res:.2f} away). A 1:2 RRR is MATHEMATICALLY IMPOSSIBLE without breaking resistance. You MUST return HOLD."
+                else:
+                    math_guardrail = f"\nMATHEMATICAL GUARDRAIL: A BUY trade with SL below VWAP ({vwap_f}) requires TP at {req_tp:.2f}. This is BELOW Macro Resistance ({res_f:.2f}), so a 1:2 RRR IS mathematically possible."
+        except Exception as e:
+            print(f"      Error calculating math guardrail: {e}")
+            
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
         prompt = f"""
@@ -471,7 +502,7 @@ Bollinger Bands (20-day): Upper={bb_upper}, Middle={bb_mid}, Lower={bb_lower}.
 Mathematical Macro Levels ({lookback_str}): Resistance={resistance_level}, Support={support_level}. Do NOT hallucinate support/resistance. Use these exact bounds for your analysis.
 Trend Alignment (200 EMA): {trend_status}.
 Currency Strength Overview (Multi-Timeframe): {cs_overview}.
-{macro_str}.
+{macro_str}.{math_guardrail}
 {sentiment_str}.
 {finbert_str}.
 
