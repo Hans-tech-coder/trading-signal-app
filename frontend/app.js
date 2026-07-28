@@ -349,7 +349,14 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (data.status === "success") {
                 executeStatus.style.color = 'var(--success)';
-                executeStatus.innerHTML = `✅ <b>Success!</b> ${data.message}`;
+                // The backend nests the message inside 'details'
+                executeStatus.innerHTML = `✅ <b>Success!</b> ${data.details.message}`;
+                
+                // Automatically refresh Win Rate Analytics and MT5 Analytics
+                loadStats();
+                if (typeof loadMt5Analytics === 'function') {
+                    loadMt5Analytics();
+                }
             } else {
                 executeStatus.style.color = 'var(--danger)';
                 executeStatus.innerHTML = `❌ <b>Failed:</b> ${data.message}`;

@@ -110,11 +110,20 @@ def _execute_trade_sync(action, raw_symbol, sl, tp, lot_size=None, deviation=10)
     
     result = mt5.order_send(request)
     
+    if result is None:
+        mt5.shutdown()
+        error_code = mt5.last_error()
+        return {"success": False, "message": f"MT5 rejected the order request entirely. Check parameters. (Code: {error_code})"}
+        
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         # Fallback to ORDER_FILLING_FOK if IOC is not supported by broker
         print(f"IOC failed with code {result.retcode}. Retrying with FOK...")
         request["type_filling"] = mt5.ORDER_FILLING_FOK
         result = mt5.order_send(request)
+        
+        if result is None:
+            mt5.shutdown()
+            return {"success": False, "message": "MT5 rejected the FOK fallback order request."}
 
     mt5.shutdown()
     

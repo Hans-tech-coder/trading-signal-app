@@ -753,7 +753,7 @@ class ExecuteTradeRequest(BaseModel):
 def execute_trade_endpoint(req: ExecuteTradeRequest):
     try:
         print(f"Executing {req.action} for {req.symbol} via MT5 Engine with Lot: {req.lot_size}...")
-        result = mt5_engine.execute_trade(req.action, req.symbol, req.entry, req.sl, req.tp, req.lot_size)
+        result = mt5_engine.execute_trade(req.action, req.symbol, req.sl, req.tp, req.lot_size)
         if result["success"]:
             # Link the DB signal to the exact MT5 ticket
             ticket_id = result.get("ticket")
