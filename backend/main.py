@@ -6,6 +6,7 @@ import sys
 import re
 import yfinance as yf
 import pandas as pd
+import pandas_ta as ta
 from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
@@ -66,6 +67,7 @@ class ExecuteTradeRequest(BaseModel):
     entry: str
     sl: str
     tp: str
+    lot_size: float = None
 
 MAJOR_PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "XAUUSD=X"]
 
@@ -80,7 +82,12 @@ def find_best_pair(date_str: str) -> str:
     best_pair = MAJOR_PAIRS[0]
     max_move = -1
     
-    end_date = datetime.strptime(date_str, "%Y-%m-%d")
+    # Handle ISO format dates from frontend (e.g. 2026-07-28T11:00:22.609293)
+    if 'T' in date_str:
+        end_date = datetime.fromisoformat(date_str.split('+')[0]) # Strip timezone for pure calc if needed
+    else:
+        end_date = datetime.strptime(date_str, "%Y-%m-%d")
+        
     start_date = end_date - timedelta(days=10)
     
     for pair in MAJOR_PAIRS:
@@ -123,28 +130,16 @@ def calculate_atr(ticker_symbol: str, period: int = 14) -> float:
         print(f"Error calculating ATR for {ticker_symbol}: {e}")
         return 0.0
 
-def calculate_lot_size(account_balance: float, risk_pct: float, stop_loss_pips: float, pair: str) -> float:
-    """Calculates MT5 lot size based on risk parameters."""
-    if stop_loss_pips <= 0:
+def calculate_lot_size(entry_f: float, sl_f: float, risk_pct: float, pair: str) -> float:
+    """Delegates to MT5 for accurate lot sizing using real broker specifications."""
+    try:
+        if "JPY" in pair and len(str(int(entry_f))) <= 3:
+            # simple check if entry is roughly correct for JPY
+            pass
+        return mt5_engine.calculate_lot_size(pair, entry_f, sl_f, risk_pct / 100.0)
+    except Exception as e:
+        print(f"MT5 Lot size calculation error: {e}")
         return 0.01
-    
-    risk_amount = account_balance * (risk_pct / 100.0)
-    
-    # Standard lot size is 100,000 units. 
-    # For pairs ending in USD (like EURUSD, XAUUSD), 1 pip = $10 per standard lot.
-    # For JPY pairs, it varies, but we'll use a simplified baseline of $10 per pip per lot for now
-    # to keep it straightforward, or adjust if we want exact precision.
-    pip_value_per_lot = 10.0
-    if "JPY" in pair:
-        pip_value_per_lot = 1000 / 150.0 # Approximate JPY rate
-    elif "XAUUSD" in pair:
-        pip_value_per_lot = 100.0 # Gold pip value is often $1 per 0.01 lot -> $100 per 1.0 lot (standard points)
-        
-    lot_size = risk_amount / (stop_loss_pips * pip_value_per_lot)
-    
-    # Cap at standard MT5 limits (0.01 to 100)
-    lot_size = max(0.01, min(round(lot_size, 2), 100.0))
-    return lot_size
 
 def calculate_vwap(ticker_symbol: str) -> float:
     """Calculates recent VWAP."""
@@ -178,6 +173,39 @@ def calculate_bollinger_bands(ticker_symbol: str, period: int = 20) -> tuple:
         return round(float(upper), 5), round(float(sma), 5), round(float(lower), 5)
     except Exception:
         return (0.0, 0.0, 0.0)
+
+def calculate_adx(ticker_symbol: str, period: int = 14) -> float:
+    """Calculates ADX (Average Directional Index) to determine trend strength."""
+    try:
+        yf_sym = get_yf_symbol(ticker_symbol)
+        ticker = yf.Ticker(yf_sym)
+        hist = ticker.history(period="1mo")
+        if len(hist) < period + 1: return 0.0
+        
+        adx_df = ta.adx(hist['High'], hist['Low'], hist['Close'], length=period)
+        if adx_df is not None and not adx_df.empty:
+            return round(float(adx_df[f'ADX_{period}'].iloc[-1]), 2)
+        return 0.0
+    except Exception as e:
+        print(f"Error calculating ADX: {e}")
+        return 0.0
+
+def calculate_ema(ticker_symbol: str, period: int = 200) -> float:
+    """Calculates EMA (Exponential Moving Average) to determine trend direction."""
+    try:
+        yf_sym = get_yf_symbol(ticker_symbol)
+        ticker = yf.Ticker(yf_sym)
+        # 200 EMA requires at least 200 bars, fetching 1 year
+        hist = ticker.history(period="1y")
+        if len(hist) < period: return 0.0
+        
+        ema_series = ta.ema(hist['Close'], length=period)
+        if ema_series is not None and not ema_series.empty:
+            return round(float(ema_series.iloc[-1]), 5)
+        return 0.0
+    except Exception as e:
+        print(f"Error calculating EMA: {e}")
+        return 0.0
 
 def calculate_currency_strength() -> dict:
     """Returns currency strength across multiple timeframes (1H, 4H, 24H)."""
@@ -333,6 +361,8 @@ async def scan_and_signal(req: ScanRequest):
         print("      Calculating Advanced Indicators...")
         vwap = calculate_vwap(best_pair)
         bb_upper, bb_mid, bb_lower = calculate_bollinger_bands(best_pair)
+        adx_val = calculate_adx(best_pair)
+        ema_val = calculate_ema(best_pair)
         
         print("      Fetching Retail Sentiment from Myfxbook...")
         sentiment_data = sentiment.get_myfxbook_sentiment(best_pair)
@@ -351,6 +381,11 @@ async def scan_and_signal(req: ScanRequest):
         
         print(f"      {macro_str}")
         print(f"      News Status: {news_check['message']}")
+        
+        print("      Analyzing News Sentiment with FinBERT...")
+        finbert_data = news_engine.get_finbert_sentiment(tv_symbol)
+        finbert_str = f"FinBERT News Sentiment: {finbert_data['sentiment']} (Score: {finbert_data['score']})"
+        print(f"      {finbert_str}")
             
         print(f"      VWAP: {vwap}")
         print(f"      Bollinger Bands: Upper={bb_upper}, Mid={bb_mid}, Lower={bb_lower}")
@@ -364,6 +399,35 @@ async def scan_and_signal(req: ScanRequest):
         
         print(f"      Currency Strength: {cs_overview}")
         print(f"      {sentiment_str}")
+        print(f"      Technical Filters - ADX: {adx_val}, 200 EMA: {ema_val}")
+
+        # --- PRE-SCAN FILTER LOGIC (Mathematical Bouncer) ---
+        if 0 < adx_val < 25:
+            reason = f"Market is Choppy/Ranging (ADX {adx_val} < 25). AI scan aborted to protect capital."
+            print(f"      [FILTERED] {reason}")
+            # Save to Database as HOLD
+            database.save_signal(tv_symbol, "HOLD", "", "", "", 0.0, 0.0)
+            return {
+                "status": "success",
+                "ticker": tv_symbol,
+                "action": "HOLD",
+                "entry": "", "tp": "", "sl": "", "lot_size": 0.0, "rrr": 0.0,
+                "reasoning": reason,
+                "currency_strength": currency_strength,
+                "news_status": news_check,
+                "macro": macro_str
+            }
+            
+        trend_status = "Neutral"
+        try:
+            curr_f = float(current_price)
+            if ema_val > 0:
+                if curr_f < ema_val:
+                    trend_status = f"Downtrend (Price {curr_f} is below 200 EMA {ema_val})"
+                elif curr_f > ema_val:
+                    trend_status = f"Uptrend (Price {curr_f} is above 200 EMA {ema_val})"
+        except Exception:
+            pass
 
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
@@ -375,9 +439,11 @@ The current price is {current_price}.
 The current Daily Average True Range (ATR) volatility is {current_atr}.
 The recent Volume Weighted Average Price (VWAP) is {vwap}.
 Bollinger Bands (20-day): Upper={bb_upper}, Middle={bb_mid}, Lower={bb_lower}.
+Trend Alignment (200 EMA): {trend_status}.
 Currency Strength Overview (Multi-Timeframe): {cs_overview}.
 {macro_str}.
 {sentiment_str}.
+{finbert_str}.
 
 NEWS STATUS: {news_check['message']}
 
@@ -392,7 +458,13 @@ Use the ATR, VWAP, and Bollinger Bands to dynamically set logical Take Profit (T
 
 CRITICAL CONTRARIAN RULE: Use the Retail Sentiment data as a contrarian filter to avoid traps. If retail sentiment is heavily skewed (>65%) in one direction, you should strongly bias your trading signal toward the OPPOSITE direction (e.g., if >70% are Long, bias toward SHORT/SELL) or return "HOLD" if the chart does not support the contrarian view. Do not trade with the retail herd.
 
-CRITICAL TREND RULE: Do NOT attempt to "catch falling knives" or "stand in front of a freight train". If the price action is in a strong, established downtrend (consistently trading below the VWAP and Middle Bollinger Band), you MUST look for SELL setups or HOLD. Do not issue a BUY signal against a strong downtrend. Conversely, do not SELL into a strong uptrend.
+CRITICAL TREND RULE: You are mathematically bound by the 200 EMA Trend Alignment. Do NOT attempt to "catch falling knives" or "stand in front of a freight train".
+- If the Trend Alignment says "Downtrend", you MUST ONLY look for SELL setups or HOLD. You are FORBIDDEN from issuing a BUY signal.
+- If the Trend Alignment says "Uptrend", you MUST ONLY look for BUY setups or HOLD. You are FORBIDDEN from issuing a SELL signal.
+- If it is "Neutral", you may choose.
+
+CRITICAL FUNDAMENTAL RULE (FinBERT): 
+- If FinBERT News Sentiment is "Positive" for the base currency (e.g., USD in XAUUSD means gold drops), it strongly biases against buying Gold. Ensure your trade direction aligns with fundamental sentiment or return "HOLD".
 
 CRITICAL NEWS RULE (ABSOLUTE OVERRIDE): Look at the NEWS STATUS above. Each high-impact news event is tagged with either [PASSED] or [UPCOMING].
 1. If ANY high-impact news event is tagged as [UPCOMING], this is a strict "No-Trade Zone". You MUST ABSOLUTELY return "HOLD" regardless of how perfect the chart or trend looks. Whipsaw risk overrides all technical setups.
@@ -532,16 +604,7 @@ Output your response STRICTLY as a JSON object with the following schema:
                 
                 if sl_distance > 0:
                     rrr = round(tp_distance / sl_distance, 2)
-                    # For lot sizing, we need a standardized "pips" measure. 
-                    if tv_symbol == "XAUUSD":
-                        # In gold, 1.00 move is often considered 100 pips.
-                        sl_pips = sl_distance
-                    elif "JPY" in tv_symbol:
-                        sl_pips = sl_distance * 100
-                    else:
-                        sl_pips = sl_distance * 10000
-                        
-                    lot_size = calculate_lot_size(req.account_balance, req.risk_percentage, sl_pips, tv_symbol)
+                    lot_size = calculate_lot_size(entry_f, sl_f, req.risk_percentage, tv_symbol)
             except Exception as e:
                 print(f"Error calculating lot size / RRR: {e}")
 
@@ -696,8 +759,8 @@ Trade History:
 @app.post("/api/execute-trade")
 def execute_trade_endpoint(req: ExecuteTradeRequest):
     try:
-        print(f"Executing MT5 Trade: {req.action} {req.symbol} @ {req.entry} | SL: {req.sl} | TP: {req.tp}")
-        result = mt5_engine.execute_trade(req.action, req.symbol, req.sl, req.tp)
+        print(f"Executing MT5 Trade: {req.action} {req.symbol} @ {req.entry} | SL: {req.sl} | TP: {req.tp} | Lot: {req.lot_size}")
+        result = mt5_engine.execute_trade(req.action, req.symbol, req.sl, req.tp, req.lot_size)
         if result["success"]:
             return {"status": "success", "message": result["message"], "data": result}
         else:

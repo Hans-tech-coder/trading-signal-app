@@ -3,7 +3,74 @@ from datetime import datetime
 import pytz
 import json
 import os
-import pytz
+import yfinance as yf
+
+finbert_analyzer = None
+
+def load_finbert():
+    global finbert_analyzer
+    if finbert_analyzer is None:
+        from transformers import pipeline
+        print("Loading Local FinBERT model... (This may take a moment)")
+        finbert_analyzer = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+    return finbert_analyzer
+
+def get_finbert_sentiment(currency_pair: str) -> dict:
+    """
+    Fetches recent news headlines for the given currency pair and uses FinBERT 
+    to analyze the overall sentiment.
+    """
+    try:
+        analyzer = load_finbert()
+        # Fetch news via yfinance
+        # e.g., if currency_pair is XAUUSD, try to fetch gold news or USD news
+        ticker = yf.Ticker(f"{currency_pair}=X")
+        news_items = ticker.news
+        
+        if not news_items:
+            return {"sentiment": "Neutral", "score": 0.0, "details": "No recent news found."}
+            
+        headlines = []
+        for item in news_items[:5]:  # Analyze top 5 headlines
+            if 'title' in item:
+                headlines.append(item['title'])
+            elif 'content' in item and 'title' in item['content']:
+                headlines.append(item['content']['title'])
+                
+        if not headlines:
+             return {"sentiment": "Neutral", "score": 0.0, "details": "Could not parse headlines."}
+             
+        results = analyzer(headlines)
+        
+        # Calculate overall score
+        # Positive = +1, Negative = -1, Neutral = 0
+        total_score = 0.0
+        for res in results:
+            label = res['label']
+            score = res['score']
+            if label == 'positive':
+                total_score += score
+            elif label == 'negative':
+                total_score -= score
+                
+        avg_score = total_score / len(results)
+        
+        if avg_score > 0.3:
+            overall = "Positive"
+        elif avg_score < -0.3:
+            overall = "Negative"
+        else:
+            overall = "Neutral"
+            
+        return {
+            "sentiment": overall,
+            "score": round(avg_score, 2),
+            "details": f"Analyzed {len(headlines)} headlines. Top headline: '{headlines[0]}'"
+        }
+        
+    except Exception as e:
+        print(f"Error in FinBERT sentiment analysis: {e}")
+        return {"sentiment": "Neutral", "score": 0.0, "details": f"Error: {e}"}
 
 def get_central_bank_rates():
     """Returns hardcoded/dynamic central bank rates for macro context."""
@@ -106,4 +173,4 @@ def check_upcoming_news(currency_pair: str):
 if __name__ == "__main__":
     print("Central Bank Rates:", get_central_bank_rates())
     print("Upcoming News (XAUUSD):", check_upcoming_news("XAUUSD"))
-    print("Upcoming News (EURUSD):", check_upcoming_news("EURUSD"))
+    print("FinBERT Sentiment (XAUUSD):", get_finbert_sentiment("XAUUSD"))

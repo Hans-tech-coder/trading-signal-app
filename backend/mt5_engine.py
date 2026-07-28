@@ -10,6 +10,9 @@ def initialize_mt5():
     return True
 
 def calculate_lot_size(symbol, entry_price, sl_price, risk_percentage=0.01):
+    if not initialize_mt5():
+        return 0.01
+        
     account_info = mt5.account_info()
     if account_info is None:
         print("Failed to get account info")
@@ -55,7 +58,7 @@ def calculate_lot_size(symbol, entry_price, sl_price, risk_percentage=0.01):
         
     return round(lot_size, 2)
 
-def _execute_trade_sync(action, raw_symbol, sl, tp, deviation=10):
+def _execute_trade_sync(action, raw_symbol, sl, tp, lot_size=None, deviation=10):
     if not initialize_mt5():
         return {"success": False, "message": "Failed to connect to MT5 Desktop App. Is it running?"}
         
@@ -85,10 +88,10 @@ def _execute_trade_sync(action, raw_symbol, sl, tp, deviation=10):
         order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
     else:
-        mt5.shutdown()
         return {"success": False, "message": "Invalid action. Must be BUY or SELL"}
         
-    lot_size = calculate_lot_size(symbol, price, float(sl), 0.01) # 1% risk
+    if lot_size is None:
+        lot_size = calculate_lot_size(symbol, price, float(sl), 0.01) # 1% risk fallback
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -126,7 +129,7 @@ def _execute_trade_sync(action, raw_symbol, sl, tp, deviation=10):
         "price": result.price
     }
 
-def execute_trade(action, raw_symbol, sl, tp, deviation=10, timeout_sec=5.0):
+def execute_trade(action, raw_symbol, sl, tp, lot_size=None, deviation=10, timeout_sec=5.0):
     """
     Wrapper function to execute trades with Timeout Protection.
     Runs the MT5 order execution in a daemon thread so it doesn't freeze the FastAPI server.
@@ -135,7 +138,7 @@ def execute_trade(action, raw_symbol, sl, tp, deviation=10, timeout_sec=5.0):
     
     def target():
         try:
-            res = _execute_trade_sync(action, raw_symbol, sl, tp, deviation)
+            res = _execute_trade_sync(action, raw_symbol, sl, tp, lot_size, deviation)
             # Update container with the result from the sync function
             for key, value in res.items():
                 result_container[key] = value
