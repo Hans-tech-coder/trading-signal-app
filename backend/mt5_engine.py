@@ -279,3 +279,48 @@ def apply_smart_trailing_stop(atr_multiplier=1.5):
 
     mt5.shutdown()
     return {"success": True, "modifications": modifications}
+
+def evaluate_ticket(ticket_id: int) -> str:
+    """
+    Checks MT5 natively to see if the trade won, lost, or is still pending.
+    Returns: 'WON', 'LOST', 'PENDING', or 'NOT_FOUND'
+    """
+    if ticket_id <= 0:
+        return 'NOT_FOUND'
+        
+    if not initialize_mt5():
+        return 'PENDING' # Can't check now
+        
+    # Check if position is still open
+    positions = mt5.positions_get(ticket=ticket_id)
+    if positions is not None and len(positions) > 0:
+        mt5.shutdown()
+        return 'PENDING'
+        
+    # If not open, check history deals related to this position
+    # The deal that closes the position has position_id == ticket_id
+    from datetime import datetime, timedelta
+    
+    # Check history from a wide range (e.g. last 30 days) to find the close deal
+    date_from = datetime.now() - timedelta(days=30)
+    date_to = datetime.now() + timedelta(days=1)
+    
+    deals = mt5.history_deals_get(date_from, date_to, position=ticket_id)
+    if deals is None or len(deals) == 0:
+        mt5.shutdown()
+        return 'NOT_FOUND' # Maybe it was never executed or too old
+        
+    # Find the closing deal (Entry == 1 which is DEAL_ENTRY_OUT)
+    # If profit + swap + commission > 0 it's a win, else loss.
+    total_profit = 0.0
+    for deal in deals:
+        if deal.entry == 1: # DEAL_ENTRY_OUT (Closing the trade)
+            total_profit += deal.profit + deal.swap + deal.commission
+            
+    mt5.shutdown()
+    
+    if total_profit > 0:
+        return 'WON'
+    else:
+        # Zero profit is considered a loss of opportunity/spread
+        return 'LOST'

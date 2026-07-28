@@ -18,7 +18,8 @@ def init_db():
             stop_loss REAL,
             lot_size REAL DEFAULT 0.0,
             rrr REAL DEFAULT 0.0,
-            status TEXT
+            status TEXT,
+            mt5_ticket_id INTEGER DEFAULT 0
         )
     ''')
     conn.commit()
@@ -40,16 +41,25 @@ def save_signal(ticker: str, action: str, entry: str, tp: str, sl: str, lot_size
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO signals (date_generated, ticker, action, entry_price, take_profit, stop_loss, lot_size, rrr, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (date_generated, ticker, action, entry_price, take_profit, stop_loss, lot_size, rrr, "PENDING"))
+        INSERT INTO signals (date_generated, ticker, action, entry_price, take_profit, stop_loss, lot_size, rrr, status, mt5_ticket_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (date_generated, ticker, action, entry_price, take_profit, stop_loss, lot_size, rrr, "PENDING", 0))
+    signal_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return signal_id
+
+def link_signal_to_ticket(signal_id: int, ticket_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE signals SET mt5_ticket_id = ? WHERE id = ?', (ticket_id, signal_id))
     conn.commit()
     conn.close()
 
 def get_pending_trades():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute('SELECT id, date_generated, ticker, action, entry_price, take_profit, stop_loss, status, lot_size, rrr FROM signals WHERE status = "PENDING" ORDER BY id DESC LIMIT 50')
+    cursor.execute('SELECT id, date_generated, ticker, action, entry_price, take_profit, stop_loss, status, lot_size, rrr, mt5_ticket_id FROM signals WHERE status = "PENDING" ORDER BY id DESC LIMIT 50')
     trades = cursor.fetchall()
     conn.close()
     
@@ -65,7 +75,8 @@ def get_pending_trades():
             "sl": t[6],
             "status": t[7],
             "lot_size": t[8],
-            "rrr": t[9]
+            "rrr": t[9],
+            "ticket_id": t[10]
         })
     return result
 

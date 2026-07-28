@@ -429,6 +429,35 @@ async def scan_and_signal(req: ScanRequest):
         except Exception:
             pass
 
+        # Calculate Mathematical Support & Resistance for the AI dynamically based on TF
+        print(f"      Calculating Macro Support/Resistance for {tf_label} timeframe...")
+        support_level = 0.0
+        resistance_level = 0.0
+        try:
+            yf_sym = get_yf_symbol(best_pair)
+            ticker_obj = yf.Ticker(yf_sym)
+            
+            # Dynamic lookback based on the selected timeframe
+            if tf_label == "1-Hour":
+                # For 1H chart, look back 2 weeks using 1H candles
+                hist_data = ticker_obj.history(period="14d", interval="1h")
+                lookback_str = "14-Day (1H candles)"
+            elif tf_label == "4-Hour":
+                # For 4H chart, look back 2 months using daily candles
+                hist_data = ticker_obj.history(period="60d", interval="1d")
+                lookback_str = "60-Day (Daily candles)"
+            else: # Daily or higher
+                # For Daily chart, look back 1 year using weekly candles
+                hist_data = ticker_obj.history(period="1y", interval="1wk")
+                lookback_str = "1-Year (Weekly candles)"
+
+            if not hist_data.empty:
+                resistance_level = round(float(hist_data['High'].max()), 5)
+                support_level = round(float(hist_data['Low'].min()), 5)
+        except Exception as e:
+            print(f"      Error calculating Support/Resistance: {e}")
+            lookback_str = "Unknown"
+
         # 3. Vision Analysis with Gemini
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
         prompt = f"""
@@ -439,6 +468,7 @@ The current price is {current_price}.
 The current Daily Average True Range (ATR) volatility is {current_atr}.
 The recent Volume Weighted Average Price (VWAP) is {vwap}.
 Bollinger Bands (20-day): Upper={bb_upper}, Middle={bb_mid}, Lower={bb_lower}.
+Mathematical Macro Levels ({lookback_str}): Resistance={resistance_level}, Support={support_level}. Do NOT hallucinate support/resistance. Use these exact bounds for your analysis.
 Trend Alignment (200 EMA): {trend_status}.
 Currency Strength Overview (Multi-Timeframe): {cs_overview}.
 {macro_str}.
@@ -608,9 +638,8 @@ Output your response STRICTLY as a JSON object with the following schema:
             except Exception as e:
                 print(f"Error calculating lot size / RRR: {e}")
 
-        # Save to Database
-        if action != "HOLD":
-            database.save_signal(tv_symbol, action, entry, tp, sl, lot_size, rrr)
+        # Removed saving to Database here. We will only save upon execution.
+        signal_id = 0
 
         return {
             "status": "success",
@@ -624,7 +653,8 @@ Output your response STRICTLY as a JSON object with the following schema:
             "reasoning": reasoning,
             "currency_strength": currency_strength,
             "news_status": news_check,
-            "macro": macro_str
+            "macro": macro_str,
+            "signal_id": signal_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -636,66 +666,20 @@ def evaluate_trades():
     
     for trade in pending_trades:
         trade_id = trade["id"]
-        date_gen = trade["date"]
-        ticker = trade["ticker"]
-        action = trade["action"]
-        entry = trade["entry"]
-        tp = trade["tp"]
-        sl = trade["sl"]
+        ticket_id = trade.get("ticket_id", 0)
         
-        # Yahoo finance uses =X for forex
-        y_ticker = ticker + "=X"
-        yf_sym = get_yf_symbol(y_ticker)
+        # If it has no ticket, it was never executed. We can't evaluate it truly.
+        if not ticket_id or ticket_id == 0:
+            continue
+            
+        # Native MT5 Check
+        status = mt5_engine.evaluate_ticket(ticket_id)
         
-        try:
-            # Fetch data from date_generated to today with 1-hour interval for accurate intraday tracking
-            # Give yfinance a 2-day future buffer to avoid timezone truncation issues with futures
-            end_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
-            data = yf.download(yf_sym, start=date_gen, end=end_date, interval="1h", progress=False)
+        if status in ["WON", "LOST"]:
+            database.update_trade_status(trade_id, status)
+            evaluated += 1
             
-            # Smart Fallback: If 1H intraday data is missing (common for Futures like Gold), use Daily data
-            if data.empty:
-                data = yf.download(yf_sym, start=date_gen, end=end_date, interval="1d", progress=False)
-            
-            if data.empty:
-                continue
-                
-            highs = data['High'].values
-            lows = data['Low'].values
-            
-            status = "PENDING"
-            for i in range(len(highs)):
-                # highs[i] could be a scalar or a 1D array depending on pandas version
-                high_val = highs[i]
-                low_val = lows[i]
-                
-                # Safely extract scalar value
-                high = float(high_val.item() if hasattr(high_val, 'item') else high_val)
-                low = float(low_val.item() if hasattr(low_val, 'item') else low_val)
-                
-                if action == "BUY":
-                    if high >= tp:
-                        status = "WON"
-                        break
-                    elif low <= sl:
-                        status = "LOST"
-                        break
-                elif action == "SELL":
-                    if low <= tp:
-                        status = "WON"
-                        break
-                    elif high >= sl:
-                        status = "LOST"
-                        break
-                        
-            if status != "PENDING":
-                database.update_trade_status(trade_id, status)
-                evaluated += 1
-                
-        except Exception as e:
-            print(f"Error evaluating trade {trade_id}: {e}")
-            
-    return {"status": "success", "evaluated": evaluated}
+    return {"status": "success", "evaluated_count": evaluated}
 
 @app.get("/api/trade-stats")
 def trade_stats():
@@ -756,15 +740,43 @@ Trade History:
         print(f"AI Mentor Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate AI mentor feedback.")
 
+class ExecuteTradeRequest(BaseModel):
+    action: str
+    symbol: str
+    entry: str
+    sl: str
+    tp: str
+    lot_size: float = None
+    signal_id: int = None
+
 @app.post("/api/execute-trade")
 def execute_trade_endpoint(req: ExecuteTradeRequest):
     try:
-        print(f"Executing MT5 Trade: {req.action} {req.symbol} @ {req.entry} | SL: {req.sl} | TP: {req.tp} | Lot: {req.lot_size}")
-        result = mt5_engine.execute_trade(req.action, req.symbol, req.sl, req.tp, req.lot_size)
+        print(f"Executing {req.action} for {req.symbol} via MT5 Engine with Lot: {req.lot_size}...")
+        result = mt5_engine.execute_trade(req.action, req.symbol, req.entry, req.sl, req.tp, req.lot_size)
         if result["success"]:
-            return {"status": "success", "message": result["message"], "data": result}
+            # Link the DB signal to the exact MT5 ticket
+            ticket_id = result.get("ticket")
+            if ticket_id:
+                # Calculate RRR locally for the DB log
+                rrr = 0.0
+                try:
+                    e_f, sl_f, tp_f = float(req.entry), float(req.sl), float(req.tp)
+                    if abs(e_f - sl_f) > 0:
+                        rrr = round(abs(e_f - tp_f) / abs(e_f - sl_f), 2)
+                except Exception:
+                    pass
+                
+                # Save signal only now that it's executed
+                print(f"Saving Trade to Database... Linking to MT5 Ticket ID {ticket_id}")
+                signal_id = database.save_signal(req.symbol, req.action, req.entry, req.tp, req.sl, req.lot_size, rrr)
+                
+                if signal_id:
+                    database.link_signal_to_ticket(signal_id, ticket_id)
+                    
+            return {"status": "success", "details": result}
         else:
-            return {"status": "error", "message": result["message"]}
+            raise HTTPException(status_code=500, detail=result.get("message", "Execution failed"))
     except Exception as e:
         print(f"Execute Trade Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
