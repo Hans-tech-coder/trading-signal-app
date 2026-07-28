@@ -104,9 +104,9 @@ def get_trade_stats():
     total_finished = won + lost
     win_rate = (won / total_finished * 100) if total_finished > 0 else 0
     
-    # Get latest 10 trades
-    cursor.execute('SELECT date_generated, ticker, action, status, lot_size, rrr FROM signals ORDER BY id DESC LIMIT 10')
-    recent_trades = [{"date": r[0], "ticker": r[1], "action": r[2], "status": r[3], "lot_size": r[4], "rrr": r[5]} for r in cursor.fetchall()]
+    # Get latest 10 trades with full details
+    cursor.execute('SELECT date_generated, ticker, action, status, lot_size, rrr, entry_price, take_profit, stop_loss FROM signals ORDER BY id DESC LIMIT 10')
+    recent_trades = [{"date": r[0], "ticker": r[1], "action": r[2], "status": r[3], "lot_size": r[4], "rrr": r[5], "entry": r[6], "tp": r[7], "sl": r[8]} for r in cursor.fetchall()]
     
     conn.close()
     

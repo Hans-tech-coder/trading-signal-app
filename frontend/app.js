@@ -43,18 +43,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     stats.recent_trades.forEach(t => {
                         const li = document.createElement('li');
-                        li.style.padding = '0.5rem 0';
+                        li.style.padding = '0.75rem 0';
                         li.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
                         li.style.display = 'flex';
-                        li.style.justifyContent = 'space-between';
+                        li.style.flexDirection = 'column';
+                        li.style.gap = '0.3rem';
                         
                         let statusColor = 'var(--text-secondary)';
                         if (t.status === 'WON') statusColor = 'var(--success)';
                         if (t.status === 'LOST') statusColor = 'var(--danger)';
                         
+                        // Formatting the details to look like an MT5 history row
                         li.innerHTML = `
-                            <span>${t.date} <b>${t.ticker}</b> - ${t.action} (Lot: ${t.lot_size || 0}, RRR: 1:${t.rrr || 0})</span>
-                            <span style="color: ${statusColor}; font-weight: bold;">${t.status}</span>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span><span style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">${t.date}</span> <b>${t.ticker}</b> <span class="${t.action.toLowerCase() === 'buy' ? 'text-success' : 'text-danger'}" style="margin-left: 5px; font-weight: bold;">${t.action}</span></span>
+                                <span style="color: ${statusColor}; font-weight: bold; font-size: 0.9em;">${t.status}</span>
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; font-size: 0.85em; color: var(--text-secondary); background: rgba(0,0,0,0.2); padding: 6px 12px; border-radius: 4px; align-items: center;">
+                                <span><b>Entry:</b> <span style="color: white;">${t.entry || 'N/A'}</span></span>
+                                <span><b>SL:</b> <span style="color: var(--danger);">${t.sl || 'N/A'}</span></span>
+                                <span><b>TP:</b> <span style="color: var(--success);">${t.tp || 'N/A'}</span></span>
+                                <span><b>Lot:</b> <span style="color: white;">${t.lot_size || 0}</span></span>
+                                <span><b>RRR:</b> <span style="color: white;">1:${t.rrr || 0}</span></span>
+                            </div>
                         `;
                         list.appendChild(li);
                     });

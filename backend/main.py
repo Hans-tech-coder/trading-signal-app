@@ -767,9 +767,10 @@ def execute_trade_endpoint(req: ExecuteTradeRequest):
                 except Exception:
                     pass
                 
-                # Save signal only now that it's executed
+                # Save signal only now that it's executed, using the actual executed volume from MT5
                 print(f"Saving Trade to Database... Linking to MT5 Ticket ID {ticket_id}")
-                signal_id = database.save_signal(req.symbol, req.action, req.entry, req.tp, req.sl, req.lot_size, rrr)
+                actual_volume = result.get("volume", req.lot_size)
+                signal_id = database.save_signal(req.symbol, req.action, req.entry, req.tp, req.sl, actual_volume, rrr)
                 
                 if signal_id:
                     database.link_signal_to_ticket(signal_id, ticket_id)
