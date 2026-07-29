@@ -333,3 +333,28 @@ def evaluate_ticket(ticket_id: int) -> str:
     else:
         # Zero profit is considered a loss of opportunity/spread
         return 'LOST'
+
+
+def get_10_day_volatility(symbol: str) -> float:
+    """
+    Calculates the 10-day volatility move directly from MT5 historical data.
+    Returns the absolute percentage move.
+    """
+    if not initialize_mt5():
+        return 0.0
+
+    # mt5.TIMEFRAME_D1 is daily candles.
+    # copy_rates_from_pos gets the last N candles up to the current moment.
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 10)
+    
+    if rates is None or len(rates) < 2:
+        return 0.0
+        
+    start_price = rates[0]['close']
+    end_price = rates[-1]['close']
+    
+    if start_price == 0:
+        return 0.0
+        
+    move = abs((end_price - start_price) / start_price)
+    return move

@@ -69,42 +69,40 @@ class ExecuteTradeRequest(BaseModel):
     tp: str
     lot_size: float = None
 
-MAJOR_PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "XAUUSD=X"]
+# Using clean standard symbols for MetaTrader 5
+MAJOR_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "XAUUSD"]
 
 def get_yf_symbol(symbol: str) -> str:
-    """Helper to map symbols for Yahoo Finance, particularly Gold which is often GC=F."""
-    if symbol == "XAUUSD=X":
+    """Helper to map MT5 symbols to Yahoo Finance for technical indicators."""
+    if symbol == "XAUUSD" or symbol == "GOLD":
         return "GC=F"
+    if not symbol.endswith("=X"):
+        return symbol + "=X"
     return symbol
 
-def find_best_pair(date_str: str) -> str:
-    """Finds the most volatile/momentum-driven pair over the last 5 days."""
-    best_pair = MAJOR_PAIRS[0]
-    max_move = -1
-    
-    # Handle ISO format dates from frontend (e.g. 2026-07-28T11:00:22.609293)
-    if 'T' in date_str:
-        end_date = datetime.fromisoformat(date_str.split('+')[0]) # Strip timezone for pure calc if needed
-    else:
-        end_date = datetime.strptime(date_str, "%Y-%m-%d")
-        
-    start_date = end_date - timedelta(days=10)
+def get_top_pairs(date_str: str, limit: int = 3) -> list:
+    """Finds the top most volatile/momentum-driven pairs over the last 10 days using MT5 live data."""
+    pair_moves = []
     
     for pair in MAJOR_PAIRS:
         try:
-            yf_sym = get_yf_symbol(pair)
-            ticker = yf.Ticker(yf_sym)
-            hist = ticker.history(start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d"))
-            if len(hist) >= 2:
-                start_price = hist['Close'].iloc[0]
-                end_price = hist['Close'].iloc[-1]
-                move = abs((end_price - start_price) / start_price)
-                if move > max_move:
-                    max_move = move
-                    best_pair = pair
-        except Exception:
+            move = mt5_engine.get_10_day_volatility(pair)
+            pair_moves.append((pair, move))
+        except Exception as e:
+            print(f"Error getting volatility for {pair}: {e}")
             continue
-    return best_pair
+            
+    # Sort pairs by absolute move, descending
+    pair_moves.sort(key=lambda x: x[1], reverse=True)
+    
+    # Return just the pair names, up to the limit
+    top_pairs = [p[0] for p in pair_moves[:limit]]
+    
+    # Fallback if empty
+    if not top_pairs:
+        return [MAJOR_PAIRS[0]]
+        
+    return top_pairs
 
 def calculate_atr(ticker_symbol: str, period: int = 14) -> float:
     """Calculates the Average True Range (ATR) to measure volatility."""
@@ -290,11 +288,30 @@ async def scan_and_signal(req: ScanRequest):
     if not os.getenv("GOOGLE_API_KEY"):
          raise HTTPException(status_code=500, detail="GOOGLE_API_KEY is not set in .env file.")
 
-    # 1. Auto-Scan Market (Yahoo Finance)
     print("\n--- NEW SCAN REQUEST ---")
-    print(f"[1/4] Auto-scanning market for the most volatile pair...")
-    best_pair = find_best_pair(req.date)
-    print(f"      Selected pair: {best_pair}")
+    print(f"[1/4] Auto-scanning market for the top 3 most volatile pairs...")
+    top_pairs = get_top_pairs(req.date, limit=3)
+    print(f"      Top pairs to scan: {top_pairs}")
+    
+    last_result = None
+    for best_pair in top_pairs:
+        print(f"\n      --- Evaluating {best_pair} ---")
+        result = await evaluate_single_pair(best_pair, req)
+        if result["action"] != "HOLD":
+            return result
+        else:
+            print(f"      {best_pair} resulted in HOLD. Moving to next pair...")
+            last_result = result
+            
+    # If all were HOLD
+    if last_result:
+        last_result["ticker"] = "MULTIPLE"
+        last_result["reasoning"] = f"Scanned top pairs ({top_pairs}) but all resulted in HOLD. Last reasoning: {last_result.get('reasoning', '')}"
+        return last_result
+    
+    raise HTTPException(status_code=500, detail="No pairs could be evaluated.")
+
+async def evaluate_single_pair(best_pair: str, req: ScanRequest):
     
     # Convert yahoo symbol to TradingView symbol (Basic mapping)
     tv_symbol = best_pair.replace("=X", "")
