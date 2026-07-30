@@ -223,7 +223,7 @@ def get_account_analytics():
         "recovery_factor": round(recovery_factor, 2)
     }
 
-def apply_smart_trailing_stop(atr_multiplier=1.5):
+def apply_smart_trailing_stop(atr_multiplier=1.0):
     if not initialize_mt5():
         return {"success": False, "message": "Failed to connect to MT5 Desktop App."}
         
@@ -289,6 +289,83 @@ def apply_smart_trailing_stop(atr_multiplier=1.5):
     mt5.shutdown()
     return {"success": True, "modifications": modifications}
 
+def run_trade_manager(active_trades):
+    """
+    Checks active trades against MT5. If an expiry time is met, closes the trade at market price.
+    Returns the number of trades closed.
+    """
+    if not active_trades:
+        return 0
+        
+    if not initialize_mt5():
+        print("Trade Manager: MT5 connection failed.")
+        return 0
+        
+    positions = mt5.positions_get()
+    if positions is None:
+        mt5.shutdown()
+        return 0
+        
+    closed_count = 0
+    now = datetime.now()
+    
+    for db_trade in active_trades:
+        # Does the MT5 position still exist?
+        pos = next((p for p in positions if p.ticket == db_trade["ticket_id"]), None)
+        
+        if pos:
+            # Check expiry
+            try:
+                # Fallback to 12 hours if AI gave bad text or no expiry
+                expiry_hours = 12
+                if db_trade["expiry"]:
+                    try:
+                        expiry_hours = float(db_trade["expiry"])
+                    except ValueError:
+                        pass # Kept at 12
+                        
+                # db_trade["date"] format is currently "YYYY-MM-DD" from date_generated, but we need exact time
+                # However, MT5 position has a exact time open
+                time_open = datetime.fromtimestamp(pos.time)
+                elapsed_hours = (now - time_open).total_seconds() / 3600.0
+                
+                if elapsed_hours >= expiry_hours:
+                    print(f"Trade Manager: Auto-closing ticket {pos.ticket} (Elapsed {elapsed_hours:.2f}h >= {expiry_hours}h expiry)")
+                    
+                    # Close at market price
+                    action_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                    tick = mt5.symbol_info_tick(pos.symbol)
+                    price = tick.bid if action_type == mt5.ORDER_TYPE_SELL else tick.ask
+                    
+                    request = {
+                        "action": mt5.TRADE_ACTION_DEAL,
+                        "symbol": pos.symbol,
+                        "volume": pos.volume,
+                        "type": action_type,
+                        "position": pos.ticket,
+                        "price": price,
+                        "deviation": 20,
+                        "magic": 0,
+                        "comment": "Auto-Expiry Close",
+                        "type_time": mt5.ORDER_TIME_GTC,
+                        "type_filling": mt5.ORDER_FILLING_IOC,
+                    }
+                    
+                    res = mt5.order_send(request)
+                    if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                        print(f"Trade Manager: Closed ticket {pos.ticket} successfully.")
+                        closed_count += 1
+                        import database # Lazy import
+                        database.update_trade_status(db_trade["id"], "EXPIRED/CLOSED")
+                    else:
+                        print(f"Trade Manager: Failed to close ticket {pos.ticket}. Code: {res.retcode if res else 'None'}")
+                        
+            except Exception as e:
+                print(f"Trade Manager Error on ticket {pos.ticket}: {e}")
+                
+    mt5.shutdown()
+    return closed_count
+
 def evaluate_ticket(ticket_id: int) -> str:
     """
     Checks MT5 natively to see if the trade won, lost, or is still pending.
@@ -306,15 +383,8 @@ def evaluate_ticket(ticket_id: int) -> str:
         mt5.shutdown()
         return 'PENDING'
         
-    # If not open, check history deals related to this position
-    # The deal that closes the position has position_id == ticket_id
-    from datetime import datetime, timedelta
-    
-    # Check history from a wide range (e.g. last 30 days) to find the close deal
-    date_from = datetime.now() - timedelta(days=30)
-    date_to = datetime.now() + timedelta(days=1)
-    
-    deals = mt5.history_deals_get(date_from, date_to, position=ticket_id)
+    # Check history to find the close deal
+    deals = mt5.history_deals_get(position=ticket_id)
     if deals is None or len(deals) == 0:
         mt5.shutdown()
         return 'NOT_FOUND' # Maybe it was never executed or too old

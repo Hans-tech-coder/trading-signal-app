@@ -59,12 +59,13 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <span><span style="color: var(--text-secondary); font-size: 0.85em; margin-right: 8px;">${t.date}</span> <b>${t.ticker}</b> <span class="${t.action.toLowerCase() === 'buy' ? 'text-success' : 'text-danger'}" style="margin-left: 5px; font-weight: bold;">${t.action}</span></span>
                                 <span style="color: ${statusColor}; font-weight: bold; font-size: 0.9em;">${t.status}</span>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; font-size: 0.85em; color: var(--text-secondary); background: rgba(0,0,0,0.2); padding: 6px 12px; border-radius: 4px; align-items: center;">
+                            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; font-size: 0.85em; color: var(--text-secondary); background: rgba(0,0,0,0.2); padding: 6px 12px; border-radius: 4px; align-items: center;">
                                 <span><b>Entry:</b> <span style="color: white;">${t.entry || 'N/A'}</span></span>
                                 <span><b>SL:</b> <span style="color: var(--danger);">${t.sl || 'N/A'}</span></span>
                                 <span><b>TP:</b> <span style="color: var(--success);">${t.tp || 'N/A'}</span></span>
                                 <span><b>Lot:</b> <span style="color: white;">${t.lot_size || 0}</span></span>
                                 <span><b>RRR:</b> <span style="color: white;">1:${t.rrr || 0}</span></span>
+                                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${t.expiry || ''}"><b>Expiry:</b> <span style="color: #fbbf24;">${t.expiry || '--'}</span></span>
                             </div>
                         `;
                         list.appendChild(li);
@@ -225,6 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('signal-sl').textContent = data.sl || (data.action === "HOLD" ? "WAIT" : "--");
             document.getElementById('signal-lotsize').textContent = data.lot_size ? data.lot_size : "--";
             document.getElementById('signal-rrr').textContent = data.rrr ? `1:${data.rrr}` : "--";
+            document.getElementById('signal-expiry').textContent = data.expiry || "--";
 
             if (data.action === "HOLD") {
                 document.getElementById('signal-reasoning').innerHTML = "<b>🚨 NO TRADE TODAY:</b> " + data.reasoning.replace(/\n/g, '<br>');
@@ -241,7 +243,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     symbol: data.ticker,
                     entry: data.entry,
                     sl: data.sl,
-                    tp: data.tp
+                    tp: data.tp,
+                    expiry: data.expiry || ""
                 };
             }
 

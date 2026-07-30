@@ -20,6 +20,8 @@ import subprocess
 import json
 import threading
 import time
+import asyncio
+from contextlib import asynccontextmanager
 import database
 import sentiment
 import news_engine
@@ -31,7 +33,11 @@ client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 # Add the TradingAgents repo to path so we can import it (kept for default_config if needed, but not required)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../TradingAgents')))
 
-app = FastAPI()
+app = FastAPI(
+    title="AlphaSignal Engine",
+    description="Backend for generating trading signals using Gemini Vision + MT5 execution",
+    version="2.0",
+)
 
 # Allow frontend to access the API
 app.add_middleware(
@@ -50,10 +56,43 @@ def trailing_stop_loop():
             print(f"Trailing stop loop error: {e}")
         time.sleep(60)
 
+async def trade_manager_loop():
+    """Background task that runs every minute to manage active trades."""
+    while True:
+        try:
+            active_trades = database.get_active_trades()
+            if active_trades:
+                # 1. Evaluate standard Win/Loss
+                for t in active_trades:
+                    status = mt5_engine.evaluate_ticket(t["ticket_id"])
+                    if status in ["WON", "LOST"]:
+                        database.update_trade_status(t["id"], status)
+                
+                # 2. Re-fetch active trades in case some were just closed above
+                current_active = database.get_active_trades()
+                
+                # 3. Run Trade Manager (Expiry Auto-Close)
+                closed = mt5_engine.run_trade_manager(current_active)
+                if closed > 0:
+                    pass # Handled in the engine
+                
+                # 4. Apply Smart Trailing Stop (1.0x ATR)
+                mt5_engine.apply_smart_trailing_stop(1.0)
+                
+        except Exception as e:
+            print(f"Trade Manager Loop Error: {e}")
+            
+        await asyncio.sleep(60) # Run every 60 seconds
+
 @app.on_event("startup")
-def start_background_tasks():
+async def startup_event():
+    # Start the legacy threading task
     thread = threading.Thread(target=trailing_stop_loop, daemon=True)
     thread.start()
+    
+    # Start the async background task
+    asyncio.create_task(trade_manager_loop())
+    print("🚀 Background Trade Manager initialized and running.")
 
 
 class ScanRequest(BaseModel):
@@ -68,6 +107,8 @@ class ExecuteTradeRequest(BaseModel):
     sl: str
     tp: str
     lot_size: float = None
+    expiry: str = ""
+    signal_id: int = None
 
 # Using clean standard symbols for MetaTrader 5
 MAJOR_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "XAUUSD"]
@@ -80,7 +121,7 @@ def get_yf_symbol(symbol: str) -> str:
         return symbol + "=X"
     return symbol
 
-def get_top_pairs(date_str: str, limit: int = 3) -> list:
+def get_top_pairs(date_str: str, limit: int = 5) -> list:
     """Finds the top most volatile/momentum-driven pairs over the last 10 days using MT5 live data."""
     pair_moves = []
     
@@ -289,8 +330,8 @@ async def scan_and_signal(req: ScanRequest):
          raise HTTPException(status_code=500, detail="GOOGLE_API_KEY is not set in .env file.")
 
     print("\n--- NEW SCAN REQUEST ---")
-    print(f"[1/4] Auto-scanning market for the top 3 most volatile pairs...")
-    top_pairs = get_top_pairs(req.date, limit=3)
+    print(f"[1/4] Auto-scanning market for the top 5 most volatile pairs...")
+    top_pairs = get_top_pairs(req.date, limit=5)
     print(f"      Top pairs to scan: {top_pairs}")
     
     last_result = None
@@ -485,7 +526,12 @@ async def evaluate_single_pair(best_pair: str, req: ScanRequest):
             supp_f = float(support_level)
             res_f = float(resistance_level)
             
-            if "Downtrend" in trend_status and cp_f < vwap_f:
+            # Kronos VWAP Overextension Filter
+            vwap_dist = abs(cp_f - vwap_f) / vwap_f if vwap_f > 0 else 0
+            
+            if vwap_dist > 0.003:
+                math_guardrail = f"\nMATHEMATICAL GUARDRAIL: Price is OVEREXTENDED from VWAP ({vwap_dist*100:.2f}% distance). This is highly susceptible to mean reversion. You MUST return HOLD."
+            elif "Downtrend" in trend_status and cp_f < vwap_f:
                 risk = vwap_f - cp_f
                 req_reward = risk * 2
                 req_tp = cp_f - req_reward
@@ -541,6 +587,8 @@ CRITICAL TREND RULE: You are mathematically bound by the 200 EMA Trend Alignment
 - If the Trend Alignment says "Uptrend", you MUST ONLY look for BUY setups or HOLD. You are FORBIDDEN from issuing a SELL signal.
 - If it is "Neutral", you may choose.
 
+CRITICAL VWAP RULE: VWAP is your primary magnet and fair-value anchor. Avoid entering trades if the price is significantly far from VWAP, as mean-reversion is highly likely. Follow the Mathematical Guardrail exactly if it says price is overextended.
+
 CRITICAL FUNDAMENTAL RULE (FinBERT): 
 - If FinBERT News Sentiment is "Positive" for the base currency (e.g., USD in XAUUSD means gold drops), it strongly biases against buying Gold. Ensure your trade direction aligns with fundamental sentiment or return "HOLD".
 
@@ -555,6 +603,7 @@ Output your response STRICTLY as a JSON object with the following schema:
   "entry": "suggested entry price or '' if HOLD",
   "tp": "suggested take profit or '' if HOLD",
   "sl": "suggested stop loss or '' if HOLD",
+  "expiry_hours": integer (e.g., 4),
   "reasoning": "A concise 2-3 sentence explanation of what you see on the chart and how you used the indicators (ATR, VWAP, etc.) that justifies this decision."
 }}
 """
@@ -590,73 +639,13 @@ Output your response STRICTLY as a JSON object with the following schema:
                 raw_text = raw_text[:-3]
             raw_text = raw_text.strip()
             
-            parsed = False
-            ai_data = None
-            temp_text = raw_text
+            ai_data = json.loads(raw_text)
             
-            # Keep trying to load; if it fails, strip the last char if it's an extra closing bracket
-            while len(temp_text) > 0 and not parsed:
-                try:
-                    ai_data = json.loads(temp_text)
-                    parsed = True
-                except json.JSONDecodeError:
-                    if temp_text.endswith('}'):
-                        temp_text = temp_text[:-1].strip()
-                    elif temp_text.endswith(']'):
-                        temp_text = temp_text[:-1].strip()
-                    else:
-                        break
-            
-            if not parsed:
-                # Fallback to basic extraction
-                start_idx = raw_text.find('{')
-                end_idx = raw_text.rfind('}')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    clean_json_str = raw_text[start_idx:end_idx+1]
-                    try:
-                        ai_data = json.loads(clean_json_str)
-                        parsed = True
-                    except json.JSONDecodeError:
-                        pass
-                
-            if not parsed:
-                # Final fallback: use regex to extract fields
-                import re
-                action_match = re.search(r'"action"\s*:\s*"([^"]+)"', raw_text)
-                entry_match = re.search(r'"entry"\s*:\s*"([^"]*)"', raw_text)
-                tp_match = re.search(r'"tp"\s*:\s*"([^"]*)"', raw_text)
-                sl_match = re.search(r'"sl"\s*:\s*"([^"]*)"', raw_text)
-                
-                # Use a more robust regex to capture reasoning even if closing quotes are missing
-                reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]*)', raw_text)
-                if not reasoning_match:
-                    reasoning_match = re.search(r'"reasoning"\s*:\s*"(.*)', raw_text, re.DOTALL)
-                
-                if action_match:
-                    ai_data = {
-                        "action": action_match.group(1),
-                        "entry": entry_match.group(1) if entry_match else "",
-                        "tp": tp_match.group(1) if tp_match else "",
-                        "sl": sl_match.group(1) if sl_match else "",
-                        "reasoning": reasoning_match.group(1).strip() if reasoning_match else "No reasoning provided."
-                    }
-                else:
-                    raise Exception(f"Could not parse JSON from response: {raw_text}")
-                    
-            if isinstance(ai_data, list) and len(ai_data) > 0:
-                ai_data = ai_data[0]
-                
             action = ai_data.get("action", "HOLD").upper()
-            
-            if action == "HOLD":
-                entry = ""
-                tp = ""
-                sl = ""
-            else:
-                entry = str(ai_data.get("entry", ""))
-                tp = str(ai_data.get("tp", ""))
-                sl = str(ai_data.get("sl", ""))
-                
+            entry = str(ai_data.get("entry", ""))
+            tp = str(ai_data.get("tp", ""))
+            sl = str(ai_data.get("sl", ""))
+            expiry_val = ai_data.get("expiry_hours", "")
             reasoning = ai_data.get("reasoning", "Analyzed via TradingView chart vision.")
             
         except Exception as e:
@@ -689,6 +678,16 @@ Output your response STRICTLY as a JSON object with the following schema:
         # Removed saving to Database here. We will only save upon execution.
         signal_id = 0
 
+        # Kronos-inspired Time-Based Expiry
+        expiry_str = ""
+        if action != "HOLD":
+            if tf_label == "1-Hour":
+                expiry_str = "Close trade at market price if TP/SL not hit in 4 to 8 hours."
+            elif tf_label == "4-Hour":
+                expiry_str = "Close trade at market price if TP/SL not hit in 24 hours."
+            else:
+                expiry_str = "Close trade at market price if TP/SL not hit in 3 to 5 days."
+
         return {
             "status": "success",
             "ticker": tv_symbol,
@@ -699,6 +698,7 @@ Output your response STRICTLY as a JSON object with the following schema:
             "lot_size": lot_size,
             "rrr": rrr,
             "reasoning": reasoning,
+            "expiry": expiry_str,
             "currency_strength": currency_strength,
             "news_status": news_check,
             "macro": macro_str,
@@ -818,7 +818,7 @@ def execute_trade_endpoint(req: ExecuteTradeRequest):
                 # Save signal only now that it's executed, using the actual executed volume from MT5
                 print(f"Saving Trade to Database... Linking to MT5 Ticket ID {ticket_id}")
                 actual_volume = result.get("volume", req.lot_size)
-                signal_id = database.save_signal(req.symbol, req.action, req.entry, req.tp, req.sl, actual_volume, rrr)
+                signal_id = database.save_signal(req.symbol, req.action, req.entry, req.tp, req.sl, actual_volume, rrr, req.expiry)
                 
                 if signal_id:
                     database.link_signal_to_ticket(signal_id, ticket_id)
