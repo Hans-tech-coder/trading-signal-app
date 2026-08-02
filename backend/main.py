@@ -26,6 +26,8 @@ import database
 import sentiment
 import news_engine
 import mt5_engine
+import risk_manager
+from tick_listener import tick_listener_instance
 
 # Setup Gemini Client
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -76,8 +78,15 @@ async def trade_manager_loop():
                 if closed > 0:
                     pass # Handled in the engine
                 
-                # 4. Apply Smart Trailing Stop (1.0x ATR)
-                mt5_engine.apply_smart_trailing_stop(1.0)
+                # 4. Update ATR Cache for the Tick Listener instead of running the slow trailing stop here
+                active_symbols = list(set([t["ticker"] for t in current_active]))
+                mt5_engine.update_atr_cache(active_symbols)
+                
+                # 5. Ensure Tick Listener is tracking the right symbols
+                if not tick_listener_instance.active and active_symbols:
+                    tick_listener_instance.start(active_symbols)
+                elif tick_listener_instance.active and not active_symbols:
+                    tick_listener_instance.stop()
                 
         except Exception as e:
             print(f"Trade Manager Loop Error: {e}")
@@ -86,14 +95,14 @@ async def trade_manager_loop():
 
 @app.on_event("startup")
 async def startup_event():
-    # Start the legacy threading task
-    thread = threading.Thread(target=trailing_stop_loop, daemon=True)
-    thread.start()
-    
     # Start the async background task
     asyncio.create_task(trade_manager_loop())
     print("🚀 Background Trade Manager initialized and running.")
+    print("⚡ Event-Driven Tick Listener Ready (Idle until trade opens)")
 
+@app.on_event("shutdown")
+def shutdown_event():
+    tick_listener_instance.stop()
 
 class ScanRequest(BaseModel):
     date: str
@@ -335,13 +344,16 @@ async def scan_and_signal(req: ScanRequest):
     print(f"      Top pairs to scan: {top_pairs}")
     
     last_result = None
-    for best_pair in top_pairs:
+    for i, best_pair in enumerate(top_pairs):
         print(f"\n      --- Evaluating {best_pair} ---")
         result = await evaluate_single_pair(best_pair, req)
         if result["action"] != "HOLD":
             return result
         else:
-            print(f"      {best_pair} resulted in HOLD. Moving to next pair...")
+            if i < len(top_pairs) - 1:
+                print(f"      {best_pair} resulted in HOLD. Moving to next pair...")
+            else:
+                print(f"      {best_pair} resulted in HOLD. Finished scanning all pairs.")
             last_result = result
             
     # If all were HOLD
@@ -387,28 +399,34 @@ async def evaluate_single_pair(best_pair: str, req: ScanRequest):
         print(f"      Selected dynamic timeframe: {tf_label} ({tv_tf}) based on momentum divergence.")
 
         # 2. Control TradingView via MCP CLI
-        print(f"[2/4] Connecting to TradingView Desktop for {tv_symbol} on {tf_label}...")
+        print(f"[2/4] Connecting to TradingView Desktop for {tv_symbol} for Multi-Timeframe Analysis...")
         # Set Symbol
         run_tv_command(["symbol", tv_symbol])
-        
-        # Set Timeframe Dynamically
-        run_tv_command(["timeframe", tv_tf])
         
         # Get Quote
         quote_data = run_tv_command(["quote"])
         current_price = quote_data.get("last", "Unknown")
         print(f"      Current Price: {current_price}")
         
-        # Take Screenshot
-        print("      Capturing chart screenshot...")
-        screenshot_data = run_tv_command(["screenshot", "-r", "chart"])
-        file_path = screenshot_data.get("file_path")
-        
-        if not file_path or not os.path.exists(file_path):
-            raise Exception("Failed to capture TradingView screenshot.")
+        # Take Screenshots for Multi-Timeframe (Daily, 4-Hour, 1-Hour)
+        print("      Capturing chart screenshots (1D, 4H, 1H)...")
+        mtf_images = []
+        for tf_code, tf_name in [("1D", "Daily"), ("240", "4-Hour"), ("60", "1-Hour")]:
+            print(f"      Switching to {tf_name} timeframe...")
+            run_tv_command(["timeframe", tf_code])
+            
+            # Architect Safeguard: Wait asynchronously for the chart to load
+            await asyncio.sleep(1.5)
+            
+            screenshot_data = run_tv_command(["screenshot", "-r", "chart"])
+            file_path = screenshot_data.get("file_path")
+            
+            if not file_path or not os.path.exists(file_path):
+                raise Exception(f"Failed to capture TradingView screenshot for {tf_name}.")
 
-        with open(file_path, "rb") as f:
-            image_bytes = f.read()
+            with open(file_path, "rb") as f:
+                mtf_images.append(f.read())
+
 
         # Get Volatility (ATR)
         print("      Calculating Current Volatility (ATR)...")
@@ -556,8 +574,8 @@ async def evaluate_single_pair(best_pair: str, req: ScanRequest):
         print(f"[3/4] Sending visual data to Gemini 3.1 Pro Vision...")
         prompt = f"""
 You are an expert forex and commodities trader. 
-I am providing you with a screenshot of the current {tf_label} chart for {tv_symbol} directly from TradingView.
-We dynamically selected the {tf_label} timeframe because our Currency Strength Engine detected the highest divergence/momentum for {tv_symbol} on this timeframe.
+I am providing you with 3 screenshots of the current charts for {tv_symbol} directly from TradingView, in chronological order: Daily, 4-Hour, and 1-Hour.
+You MUST perform Top-Down Analysis: Use the Daily chart to understand the macro trend, the 4-Hour chart for medium-term momentum, and the 1-Hour chart to find optimal entries.
 The current price is {current_price}.
 The current Daily Average True Range (ATR) volatility is {current_atr}.
 The recent Volume Weighted Average Price (VWAP) is {vwap}.
@@ -597,26 +615,27 @@ CRITICAL NEWS RULE (ABSOLUTE OVERRIDE): Look at the NEWS STATUS above. Each high
 2. If ALL high-impact news events for today are tagged as [PASSED], the whipsaw risk has subsided, and you may proceed with generating a BUY or SELL signal based on technicals.
 CRITICAL RISK RULE: You MUST ensure that the Risk-to-Reward Ratio (RRR) of your selected TP and SL is at least 1:2. If a 1:2 ratio is not possible given the market structure, you MUST return "HOLD".
 
+CRITICAL LIMIT ORDER RULE: Use Limit Orders when optimal. If the trend is strong but the current price is far from moving averages or support/resistance, DO NOT force a "BUY" or "SELL" (Market Order). Instead, output "BUY LIMIT" or "SELL LIMIT" at your desired pullback price. 
+
 Output your response STRICTLY as a JSON object with the following schema:
 {{
-  "action": "BUY" or "SELL" or "HOLD",
-  "entry": "suggested entry price or '' if HOLD",
+  "action": "BUY" or "SELL" or "BUY LIMIT" or "SELL LIMIT" or "HOLD",
+  "entry": "suggested entry price or '' if HOLD. For limit orders, this must be your chosen pullback price",
   "tp": "suggested take profit or '' if HOLD",
   "sl": "suggested stop loss or '' if HOLD",
-  "expiry_hours": integer (e.g., 4),
+  "expiry_hours": integer (The total hours to keep the trade open before auto-expiring it. E.g., if your entry is based on the 1H chart, 24 hours is appropriate. If based on the 4H chart, 72 hours. If based on the Daily chart, 120 hours. Choose based on your entry timeframe),
   "reasoning": "A concise 2-3 sentence explanation of what you see on the chart and how you used the indicators (ATR, VWAP, etc.) that justifies this decision."
 }}
 """
         # Call Gemini Vision
+        contents = [
+            types.Part.from_bytes(data=img, mime_type='image/png') for img in mtf_images
+        ]
+        contents.append(prompt)
+        
         response = client.models.generate_content(
             model='gemini-3.1-pro-preview',
-            contents=[
-                types.Part.from_bytes(
-                    data=image_bytes,
-                    mime_type='image/png',
-                ),
-                prompt
-            ],
+            contents=contents,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.1,
@@ -629,7 +648,6 @@ Output your response STRICTLY as a JSON object with the following schema:
         
         # 4. Parse Response
         try:
-            # Clean up the response text in case Gemini adds extra characters
             raw_text = response.text.strip()
             if raw_text.startswith("```json"):
                 raw_text = raw_text[7:]
@@ -639,7 +657,25 @@ Output your response STRICTLY as a JSON object with the following schema:
                 raw_text = raw_text[:-3]
             raw_text = raw_text.strip()
             
-            ai_data = json.loads(raw_text)
+            # Auto-fix JSON if Gemini returns trailing extra characters like "}\n}"
+            while raw_text.endswith('}'):
+                try:
+                    ai_data = json.loads(raw_text)
+                    break
+                except json.JSONDecodeError:
+                    raw_text = raw_text[:-1].strip()
+            else:
+                # If it doesn't end with '}', it might be abruptly cut off. Try adding '}'
+                try:
+                    ai_data = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    try:
+                        ai_data = json.loads(raw_text + '}')
+                    except json.JSONDecodeError:
+                        try:
+                            ai_data = json.loads(raw_text + '"}')
+                        except json.JSONDecodeError:
+                            raise ValueError("Unrecoverable JSON format")
             
             action = ai_data.get("action", "HOLD").upper()
             entry = str(ai_data.get("entry", ""))
@@ -654,6 +690,7 @@ Output your response STRICTLY as a JSON object with the following schema:
             entry = ""
             tp = ""
             sl = ""
+            expiry_val = ""
             reasoning = "Failed to parse AI visual analysis."
 
         # Calculate Lot Size and RRR
@@ -678,16 +715,8 @@ Output your response STRICTLY as a JSON object with the following schema:
         # Removed saving to Database here. We will only save upon execution.
         signal_id = 0
 
-        # Kronos-inspired Time-Based Expiry
-        expiry_str = ""
-        if action != "HOLD":
-            if tf_label == "1-Hour":
-                expiry_str = "Close trade at market price if TP/SL not hit in 4 to 8 hours."
-            elif tf_label == "4-Hour":
-                expiry_str = "Close trade at market price if TP/SL not hit in 24 hours."
-            else:
-                expiry_str = "Close trade at market price if TP/SL not hit in 3 to 5 days."
-
+        # We pass the actual AI-generated numeric expiry hours directly back to the API.
+        # This prevents ValueError in mt5_engine when reading from the database.
         return {
             "status": "success",
             "ticker": tv_symbol,
@@ -698,7 +727,7 @@ Output your response STRICTLY as a JSON object with the following schema:
             "lot_size": lot_size,
             "rrr": rrr,
             "reasoning": reasoning,
-            "expiry": expiry_str,
+            "expiry": str(expiry_val), # Convert integer to string for API model format
             "currency_strength": currency_strength,
             "news_status": news_check,
             "macro": macro_str,
@@ -796,12 +825,19 @@ class ExecuteTradeRequest(BaseModel):
     tp: str
     lot_size: float = None
     signal_id: int = None
+    expiry: str = ""
 
 @app.post("/api/execute-trade")
 def execute_trade_endpoint(req: ExecuteTradeRequest):
     try:
+        # 1. Pass through Centralized Risk Manager First
+        validation = risk_manager.validate_trade_request(req.action, req.symbol, req.entry, req.sl, req.tp)
+        if not validation["valid"]:
+            print(f"Risk Manager Blocked Trade: {validation['reason']}")
+            raise HTTPException(status_code=400, detail=f"Risk Manager Blocked Trade: {validation['reason']}")
+            
         print(f"Executing {req.action} for {req.symbol} via MT5 Engine with Lot: {req.lot_size}...")
-        result = mt5_engine.execute_trade(req.action, req.symbol, req.sl, req.tp, req.lot_size)
+        result = mt5_engine.execute_trade(req.action, req.symbol, req.entry, req.sl, req.tp, req.lot_size)
         if result["success"]:
             # Link the DB signal to the exact MT5 ticket
             ticket_id = result.get("ticket")

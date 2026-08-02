@@ -3,6 +3,39 @@ import math
 import threading
 from datetime import datetime, timedelta
 
+# Global ATR Cache to save CPU (Symbol -> ATR Value)
+cached_atrs = {}
+
+def update_atr_cache(symbols: list):
+    """
+    Updates the global ATR cache for the given symbols.
+    This prevents the tick listener from heavily calculating ATR on every tick.
+    """
+    if not symbols:
+        return
+        
+    if not initialize_mt5():
+        return
+        
+    for symbol in symbols:
+        try:
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 14)
+            if rates is None or len(rates) < 14:
+                continue
+            tr_list = []
+            for i in range(1, len(rates)):
+                high = rates[i]['high']
+                low = rates[i]['low']
+                prev_close = rates[i-1]['close']
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                tr_list.append(tr)
+            atr = sum(tr_list) / len(tr_list)
+            cached_atrs[symbol] = atr
+        except Exception as e:
+            print(f"Failed to update ATR cache for {symbol}: {e}")
+            
+    mt5.shutdown()
+
 def initialize_mt5():
     if not mt5.initialize():
         print("initialize() failed, error code =", mt5.last_error())
@@ -58,7 +91,7 @@ def calculate_lot_size(symbol, entry_price, sl_price, risk_percentage=0.01):
         
     return round(lot_size, 2)
 
-def _execute_trade_sync(action, raw_symbol, sl, tp, lot_size=None, deviation=10):
+def _execute_trade_sync(action, raw_symbol, entry, sl, tp, lot_size=None, deviation=10):
     if not initialize_mt5():
         return {"success": False, "message": "Failed to connect to MT5 Desktop App. Is it running?"}
         
@@ -87,14 +120,25 @@ def _execute_trade_sync(action, raw_symbol, sl, tp, lot_size=None, deviation=10)
     elif action.upper() == "SELL":
         order_type = mt5.ORDER_TYPE_SELL
         price = tick.bid
+    elif action.upper() == "BUY LIMIT":
+        order_type = mt5.ORDER_TYPE_BUY_LIMIT
+        price = float(entry) # Use the AI's requested entry price
+    elif action.upper() == "SELL LIMIT":
+        order_type = mt5.ORDER_TYPE_SELL_LIMIT
+        price = float(entry) # Use the AI's requested entry price
     else:
-        return {"success": False, "message": "Invalid action. Must be BUY or SELL"}
+        return {"success": False, "message": "Invalid action. Must be BUY, SELL, BUY LIMIT, or SELL LIMIT"}
         
     if lot_size is None:
         lot_size = calculate_lot_size(symbol, price, float(sl), 0.01) # 1% risk fallback
     
+    # Determine correct MT5 action type
+    trade_action = mt5.TRADE_ACTION_DEAL
+    if order_type in [mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_SELL_LIMIT]:
+        trade_action = mt5.TRADE_ACTION_PENDING
+
     request = {
-        "action": mt5.TRADE_ACTION_DEAL,
+        "action": trade_action,
         "symbol": symbol,
         "volume": float(lot_size),
         "type": order_type,
@@ -138,7 +182,7 @@ def _execute_trade_sync(action, raw_symbol, sl, tp, lot_size=None, deviation=10)
         "price": result.price
     }
 
-def execute_trade(action, raw_symbol, sl, tp, lot_size=None, deviation=10, timeout_sec=5.0):
+def execute_trade(action, raw_symbol, entry, sl, tp, lot_size=None, deviation=10, timeout_sec=15.0):
     """
     Wrapper function to execute trades with Timeout Protection.
     Runs the MT5 order execution in a daemon thread so it doesn't freeze the FastAPI server.
@@ -147,7 +191,7 @@ def execute_trade(action, raw_symbol, sl, tp, lot_size=None, deviation=10, timeo
     
     def target():
         try:
-            res = _execute_trade_sync(action, raw_symbol, sl, tp, lot_size, deviation)
+            res = _execute_trade_sync(action, raw_symbol, entry, sl, tp, lot_size, deviation)
             # Update container with the result from the sync function
             for key, value in res.items():
                 result_container[key] = value
@@ -223,6 +267,73 @@ def get_account_analytics():
         "recovery_factor": round(recovery_factor, 2)
     }
 
+def apply_tick_based_trailing_stop(symbol, current_price, atr_multiplier=1.0):
+    if not initialize_mt5():
+        return {"success": False, "message": "Failed to connect to MT5 Desktop App."}
+        
+    positions = mt5.positions_get(symbol=symbol)
+    if positions is None or len(positions) == 0:
+        # No mt5.shutdown() needed if called from tick_listener as it manages its own thread lifecycle or we can call it. Wait, initialize_mt5() calls mt5.initialize(), which is fine to keep open or shut down. Let's shut down just in case.
+        mt5.shutdown()
+        return {"success": True, "modifications": 0}
+        
+    modifications = 0
+    for pos in positions:
+        ticket = pos.ticket
+        pos_type = pos.type
+        current_sl = pos.sl
+        open_price = pos.price_open
+        
+        atr = cached_atrs.get(symbol, None)
+        if atr is None:
+            # Fallback
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 14)
+            if rates is not None and len(rates) >= 14:
+                tr_list = []
+                for i in range(1, len(rates)):
+                    high = rates[i]['high']
+                    low = rates[i]['low']
+                    prev_close = rates[i-1]['close']
+                    tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                    tr_list.append(tr)
+                atr = sum(tr_list) / len(tr_list)
+                
+        if atr is None:
+            continue
+            
+        trail_distance = atr * atr_multiplier
+        new_sl = current_sl
+        modified = False
+        
+        if pos_type == mt5.ORDER_TYPE_BUY:
+            proposed_sl = current_price - trail_distance
+            if current_price > open_price and proposed_sl > current_sl:
+                new_sl = proposed_sl
+                modified = True
+        elif pos_type == mt5.ORDER_TYPE_SELL:
+            proposed_sl = current_price + trail_distance
+            if current_price < open_price and (current_sl == 0 or proposed_sl < current_sl):
+                new_sl = proposed_sl
+                modified = True
+                
+        if modified:
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info:
+                 new_sl = round(new_sl, symbol_info.digits)
+                 request = {
+                     "action": mt5.TRADE_ACTION_SLTP,
+                     "symbol": symbol,
+                     "position": ticket,
+                     "sl": float(new_sl),
+                     "tp": float(pos.tp)
+                 }
+                 result = mt5.order_send(request)
+                 if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                     modifications += 1
+
+    mt5.shutdown()
+    return {"success": True, "modifications": modifications}
+
 def apply_smart_trailing_stop(atr_multiplier=1.0):
     if not initialize_mt5():
         return {"success": False, "message": "Failed to connect to MT5 Desktop App."}
@@ -241,20 +352,23 @@ def apply_smart_trailing_stop(atr_multiplier=1.0):
         current_price = pos.price_current
         open_price = pos.price_open
         
-        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 14)
-        if rates is None or len(rates) < 14:
-            continue
+        # We replace the heavy on-the-fly calculation with the cached value
+        atr = cached_atrs.get(symbol, None)
+        if atr is None:
+            # Fallback if cache is missed
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 14)
+            if rates is None or len(rates) < 14:
+                continue
+            tr_list = []
+            for i in range(1, len(rates)):
+                high = rates[i]['high']
+                low = rates[i]['low']
+                prev_close = rates[i-1]['close']
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                tr_list.append(tr)
+            atr = sum(tr_list) / len(tr_list)
             
-        # Calculate ATR
-        tr_list = []
-        for i in range(1, len(rates)):
-            high = rates[i]['high']
-            low = rates[i]['low']
-            prev_close = rates[i-1]['close']
-            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-            tr_list.append(tr)
-            
-        atr = sum(tr_list) / len(tr_list)
+        # Calculate minimum allowed SL distance based on cached ATR
         trail_distance = atr * atr_multiplier
         
         new_sl = current_sl
@@ -361,8 +475,39 @@ def run_trade_manager(active_trades):
                         print(f"Trade Manager: Failed to close ticket {pos.ticket}. Code: {res.retcode if res else 'None'}")
                         
             except Exception as e:
-                print(f"Trade Manager Error on ticket {pos.ticket}: {e}")
+                print(f"Trade Manager Error on active ticket {pos.ticket}: {e}")
                 
+        else:
+            # Maybe it's a Pending Limit Order?
+            orders = mt5.orders_get()
+            if orders:
+                pending_order = next((o for o in orders if o.ticket == db_trade["ticket_id"]), None)
+                if pending_order:
+                    try:
+                        expiry_hours = 12
+                        if db_trade["expiry"]:
+                            try:
+                                expiry_hours = float(db_trade["expiry"])
+                            except ValueError:
+                                pass
+                                
+                        time_setup = datetime.fromtimestamp(pending_order.time_setup)
+                        elapsed_hours = (now - time_setup).total_seconds() / 3600.0
+                        
+                        if elapsed_hours >= expiry_hours:
+                            print(f"Trade Manager: Auto-deleting expired Pending Order {pending_order.ticket}")
+                            request = {
+                                "action": mt5.TRADE_ACTION_REMOVE,
+                                "order": pending_order.ticket
+                            }
+                            res = mt5.order_send(request)
+                            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                                closed_count += 1
+                                import database
+                                database.update_trade_status(db_trade["id"], "EXPIRED/DELETED")
+                    except Exception as e:
+                        print(f"Trade Manager Error on pending ticket {pending_order.ticket}: {e}")
+                        
     mt5.shutdown()
     return closed_count
 
