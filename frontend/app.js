@@ -244,7 +244,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     entry: data.entry,
                     sl: data.sl,
                     tp: data.tp,
-                    expiry: data.expiry || ""
+                    expiry: data.expiry || "",
+                    lot_size: data.lot_size
                 };
             }
 

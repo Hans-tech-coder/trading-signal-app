@@ -34,7 +34,7 @@ def update_atr_cache(symbols: list):
         except Exception as e:
             print(f"Failed to update ATR cache for {symbol}: {e}")
             
-    mt5.shutdown()
+    # mt5.shutdown() # Disabled to keep global connection alive
 
 def initialize_mt5():
     if not mt5.initialize():
@@ -100,18 +100,18 @@ def _execute_trade_sync(action, raw_symbol, entry, sl, tp, lot_size=None, deviat
     
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return {"success": False, "message": f"Symbol {symbol} not found in MT5"}
         
     if not symbol_info.visible:
         if not mt5.symbol_select(symbol, True):
-            mt5.shutdown()
+            # mt5.shutdown() # Disabled to keep global connection alive
             return {"success": False, "message": f"Failed to select symbol {symbol} in MT5 Market Watch"}
             
     # Get current market price
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return {"success": False, "message": f"Failed to get current price for {symbol}"}
 
     if action.upper() == "BUY":
@@ -155,7 +155,7 @@ def _execute_trade_sync(action, raw_symbol, entry, sl, tp, lot_size=None, deviat
     result = mt5.order_send(request)
     
     if result is None:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         error_code = mt5.last_error()
         return {"success": False, "message": f"MT5 rejected the order request entirely. Check parameters. (Code: {error_code})"}
         
@@ -166,10 +166,10 @@ def _execute_trade_sync(action, raw_symbol, entry, sl, tp, lot_size=None, deviat
         result = mt5.order_send(request)
         
         if result is None:
-            mt5.shutdown()
+            # mt5.shutdown() # Disabled to keep global connection alive
             return {"success": False, "message": "MT5 rejected the FOK fallback order request."}
 
-    mt5.shutdown()
+    # mt5.shutdown() # Disabled to keep global connection alive
     
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         return {"success": False, "message": f"MT5 Order failed: {result.comment} (Code: {result.retcode})"}
@@ -208,10 +208,7 @@ def execute_trade(action, raw_symbol, entry, sl, tp, lot_size=None, deviation=10
     
     if thread.is_alive():
         # The thread is still running, which means MT5 is hung.
-        try:
-            mt5.shutdown() # Attempt to gracefully close the connection
-        except:
-            pass
+        # mt5.shutdown() # Disabled to keep global connection alive # Attempt to gracefully close the connection
         return {"success": False, "message": f"MT5 Execution timed out after {timeout_sec}s. The terminal might be unresponsive."}
         
     return result_container
@@ -222,7 +219,7 @@ def get_account_analytics():
         
     account_info = mt5.account_info()
     if account_info is None:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return {"success": False, "message": "Failed to get account info"}
         
     balance = account_info.balance
@@ -234,7 +231,7 @@ def get_account_analytics():
     
     deals = mt5.history_deals_get(date_from, date_to)
     if deals is None:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return {"success": False, "message": "Failed to get history deals"}
         
     running_profit = 0.0
@@ -257,7 +254,7 @@ def get_account_analytics():
     if max_drawdown > 0:
         recovery_factor = net_profit / max_drawdown
         
-    mt5.shutdown()
+    # mt5.shutdown() # Disabled to keep global connection alive
     
     return {
         "success": True,
@@ -274,7 +271,7 @@ def apply_tick_based_trailing_stop(symbol, current_price, atr_multiplier=1.0):
     positions = mt5.positions_get(symbol=symbol)
     if positions is None or len(positions) == 0:
         # No mt5.shutdown() needed if called from tick_listener as it manages its own thread lifecycle or we can call it. Wait, initialize_mt5() calls mt5.initialize(), which is fine to keep open or shut down. Let's shut down just in case.
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return {"success": True, "modifications": 0}
         
     modifications = 0
@@ -331,7 +328,7 @@ def apply_tick_based_trailing_stop(symbol, current_price, atr_multiplier=1.0):
                  if result and result.retcode == mt5.TRADE_RETCODE_DONE:
                      modifications += 1
 
-    mt5.shutdown()
+    # mt5.shutdown() # Disabled to keep global connection alive
     return {"success": True, "modifications": modifications}
 
 def apply_smart_trailing_stop(atr_multiplier=1.0):
@@ -340,7 +337,7 @@ def apply_smart_trailing_stop(atr_multiplier=1.0):
         
     positions = mt5.positions_get()
     if positions is None:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return {"success": False, "message": "Failed to get positions"}
         
     modifications = 0
@@ -400,7 +397,7 @@ def apply_smart_trailing_stop(atr_multiplier=1.0):
                  if result and result.retcode == mt5.TRADE_RETCODE_DONE:
                      modifications += 1
 
-    mt5.shutdown()
+    # mt5.shutdown() # Disabled to keep global connection alive
     return {"success": True, "modifications": modifications}
 
 def run_trade_manager(active_trades):
@@ -417,7 +414,7 @@ def run_trade_manager(active_trades):
         
     positions = mt5.positions_get()
     if positions is None:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return 0
         
     closed_count = 0
@@ -466,6 +463,11 @@ def run_trade_manager(active_trades):
                     }
                     
                     res = mt5.order_send(request)
+                    if res and res.retcode != mt5.TRADE_RETCODE_DONE:
+                        # Fallback to ORDER_FILLING_FOK if IOC fails (e.g. Code 10030)
+                        request["type_filling"] = mt5.ORDER_FILLING_FOK
+                        res = mt5.order_send(request)
+                        
                     if res and res.retcode == mt5.TRADE_RETCODE_DONE:
                         print(f"Trade Manager: Closed ticket {pos.ticket} successfully.")
                         closed_count += 1
@@ -508,7 +510,7 @@ def run_trade_manager(active_trades):
                     except Exception as e:
                         print(f"Trade Manager Error on pending ticket {pending_order.ticket}: {e}")
                         
-    mt5.shutdown()
+    # mt5.shutdown() # Disabled to keep global connection alive
     return closed_count
 
 def evaluate_ticket(ticket_id: int) -> str:
@@ -525,13 +527,13 @@ def evaluate_ticket(ticket_id: int) -> str:
     # Check if position is still open
     positions = mt5.positions_get(ticket=ticket_id)
     if positions is not None and len(positions) > 0:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return 'PENDING'
         
     # Check history to find the close deal
     deals = mt5.history_deals_get(position=ticket_id)
     if deals is None or len(deals) == 0:
-        mt5.shutdown()
+        # mt5.shutdown() # Disabled to keep global connection alive
         return 'NOT_FOUND' # Maybe it was never executed or too old
         
     # Find the closing deal (Entry == 1 which is DEAL_ENTRY_OUT)
@@ -541,7 +543,7 @@ def evaluate_ticket(ticket_id: int) -> str:
         if deal.entry == 1: # DEAL_ENTRY_OUT (Closing the trade)
             total_profit += deal.profit + deal.swap + deal.commission
             
-    mt5.shutdown()
+    # mt5.shutdown() # Disabled to keep global connection alive
     
     if total_profit > 0:
         return 'WON'
